@@ -1,0 +1,13 @@
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+pymongo==4.6.1
+motor==3.3.2
+python-dotenv==1.0.0
+passlib[bcrypt]==1.7.4
+python-jose[cryptography]==3.3.0
+python-multipart==0.0.6
+pydantic[email]==2.5.2
+aiofiles==23.2.1
+gitpython==3.1.40
+aiohttp==3.9.1
+httpx==0.25.2

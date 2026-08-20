@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IDE - Legacy Code Rescue</title>
+    <link rel="stylesheet" href="/static/css/styles.css">
+    <link rel="stylesheet" href="/static/css/ide.css">
+</head>
+<body>
+    <div class="ide-layout">
+        <header class="ide-header">
+            <div class="ide-header-left">
+                <button class="hamburger-btn ide-hamburger" onclick="toggleIDESidebar()" aria-label="Toggle file explorer">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+                </button>
+                <span class="ide-logo">Bug Buster IDE</span>
+                <span class="ide-sep hide-mobile">|</span>
+                <span class="hide-mobile">Team: <strong id="ideTeamName">-</strong></span>
+                <span class="ide-sep hide-mobile">|</span>
+                <span class="hide-mobile">Challenge: <strong id="ideChallenge">-</strong></span>
+            </div>
+            <div class="ide-header-center">
+                <span id="timerDisplay" class="ide-timer">--:--:--</span>
+            </div>
+            <div class="ide-header-right">
+                <button id="ideThemeToggle" class="btn-icon" onclick="toggleIDEMode()" title="Toggle theme"></button>
+                <a href="/participant/dashboard" class="btn btn-sm btn-secondary">Dashboard</a>
+                <button class="btn btn-sm btn-ghost" onclick="logout()">Logout</button>
+            </div>
+        </header>
+        <div class="ide-body">
+            <aside class="ide-sidebar" id="ideSidebar">
+                <div class="ide-sidebar-header">EXPLORER</div>
+                <div id="fileTree" class="ide-file-tree"></div>
+            </aside>
+            <div class="ide-main">
+                <div class="ide-editor-area">
+                    <div class="ide-tabs" id="editorTabs"></div>
+                    <div id="editorContainer" class="ide-editor-container">
+                        <div class="empty-state" style="padding:48px;">
+                            <p class="text-muted">Select a file from the explorer to start editing</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="ide-panels">
+                    <div class="ide-panel-tabs">
+                        <button class="ide-panel-tab active" onclick="switchPanel('terminal', this)">Terminal</button>
+                        <button class="ide-panel-tab" onclick="switchPanel('output', this)">Output</button>
+                        <button class="ide-panel-tab" onclick="switchPanel('tests', this)">Test Results</button>
+                    </div>
+                    <div class="ide-panel-content" id="panelContent">
+                        <pre id="terminalOutput" class="ide-terminal">Welcome to Bug Buster IDE Terminal\n</pre>
+                        <pre id="testOutput" class="ide-terminal" style="display:none;"></pre>
+                        <pre id="generalOutput" class="ide-terminal" style="display:none;"></pre>
+                    </div>
+                    <div class="ide-panel-actions">
+                        <button class="btn btn-sm btn-success" onclick="saveFile()" id="saveBtn">Save</button>
+                        <button class="btn btn-sm btn-primary" onclick="runCode()" id="runBtn">Run</button>
+                        <button class="btn btn-sm btn-secondary" onclick="runTests()" id="testBtn">Test</button>
+                        <button class="btn btn-sm btn-danger" onclick="submitFinal()" id="submitBtn">Submit Final</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div id="submitModal" class="modal-overlay">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>Submit Final</h3>
+                <button class="modal-close" onclick="closeSubmitModal()">&times;</button>
+            </div>
+            <p style="font-size:13px; color:var(--text-secondary);">Are you sure you want to submit? Your final version will be evaluated.</p>
+            <p style="color:var(--warning); font-size:13px; margin:12px 0;">This action cannot be undone.</p>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeSubmitModal()">Cancel</button>
+                <button class="btn btn-danger" onclick="confirmSubmit()">Yes, Submit</button>
+            </div>
+        </div>
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.js"></script>
+    <script src="/static/js/api.js"></script>
+    <script src="/static/js/ide.js"></script>
+    <script>
+        function toggleIDESidebar() { document.getElementById('ideSidebar').classList.toggle('open'); }
+        function toggleIDEMode() {
+            const current = document.documentElement.getAttribute('data-theme');
+            const next = current === 'dark' ? 'light' : 'dark';
+            document.documentElement.setAttribute('data-theme', next);
+            localStorage.setItem('theme', next);
+            if (typeof monaco !== 'undefined' && editor) monaco.editor.setTheme(next === 'dark' ? 'vs-dark' : 'vs');
+            updateIDEModeIcon(next);
+        }
+        function updateIDEModeIcon(theme) {
+            const btn = document.getElementById('ideThemeToggle');
+            if (btn) btn.innerHTML = theme === 'dark' ? ICONS.sun : ICONS.moon;
+        }
+        document.addEventListener('DOMContentLoaded', function() {
+            const theme = localStorage.getItem('theme') || 'dark';
+            document.documentElement.setAttribute('data-theme', theme);
+            updateIDEModeIcon(theme);
+        });
+    </script>
+</body>
+</html>

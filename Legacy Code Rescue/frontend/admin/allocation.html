@@ -1,0 +1,142 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Allocation - Legacy Code Rescue</title>
+    <link rel="stylesheet" href="/static/css/styles.css">
+    <style>
+        .alloc-state { display:flex; align-items:center; gap:8px; margin-bottom:20px; }
+        .alloc-step { display:flex; align-items:center; gap:6px; padding:8px 14px; border-radius:var(--radius); font-size:13px; font-weight:500; background:var(--bg-input); border:1px solid var(--border); color:var(--text-muted); }
+        .alloc-step.active { border-color:var(--primary); color:var(--primary); background:var(--primary-bg); }
+        .alloc-step.done { border-color:var(--success); color:var(--success); background:var(--success-bg); }
+        .alloc-arrow { color:var(--text-muted); font-size:14px; }
+        .alloc-step .step-dot { width:8px; height:8px; border-radius:50%; background:currentColor; }
+    </style>
+</head>
+<body>
+    <script src="/static/js/api.js"></script>
+    <script>
+        if (!API.isLoggedIn() || API.role !== 'admin') { window.location.href = '/login'; }
+        function logout() { API.clearAuth(); window.location.href = '/login'; }
+        document.body.innerHTML = renderAdminLayout('allocation', 'Challenge Allocation');
+        initTheme();
+        document.getElementById('pageContent').innerHTML = `
+            <div class="page-header with-actions">
+                <div><h1>Challenge Allocation</h1><p>Generate and manage challenge allocations</p></div>
+                <div style="display:flex; gap:8px;">
+                    <button class="btn btn-primary" onclick="generateAllocation()" id="generateBtn">${ICONS.target} Generate</button>
+                    <button class="btn btn-success" onclick="releaseAllocation()" id="releaseBtn" disabled>${ICONS.play} Release</button>
+                </div>
+            </div>
+            <div class="alloc-state" id="allocState"></div>
+            <div id="allocNotice" class="info-message mb-2" style="display:none;"></div>
+            <div class="card">
+                <div id="error-msg" class="error-message"></div>
+                <div id="success-msg" class="success-message"></div>
+                <div id="allocationContent"><div class="flex-center" style="padding:24px;"><span class="loading-spinner"></span></div></div>
+            </div>
+            <div id="confirmModal" class="modal-overlay" style="display:none;" onclick="closeModal()">
+                <div class="modal" onclick="event.stopPropagation()">
+                    <div class="modal-header">
+                        <h3 id="modalTitle">Confirm</h3>
+                        <button class="modal-close" onclick="closeModal()">&times;</button>
+                    </div>
+                    <div class="modal-body"><p id="modalBody">Are you sure?</p></div>
+                    <div class="modal-footer">
+                        <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+                        <button class="btn btn-danger" id="modalConfirmBtn">Confirm</button>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        function renderState(state) {
+            const steps = ['PENDING', 'GENERATED', 'RELEASED'];
+            const labels = { PENDING: 'Pending', GENERATED: 'Generated', RELEASED: 'Released' };
+            let html = '';
+            const activeIdx = steps.indexOf(state);
+            for (let i = 0; i < steps.length; i++) {
+                const cls = i < activeIdx ? 'done' : i === activeIdx ? 'active' : '';
+                html += `<div class="alloc-step ${cls}"><span class="step-dot"></span>${labels[steps[i]]}</div>`;
+                if (i < steps.length - 1) html += `<span class="alloc-arrow">&#8594;</span>`;
+            }
+            document.getElementById('allocState').innerHTML = html;
+        }
+
+        function showModal(title, body, onConfirm) {
+            document.getElementById('modalTitle').textContent = title;
+            document.getElementById('modalBody').textContent = body;
+            document.getElementById('modalConfirmBtn').onclick = () => { closeModal(); onConfirm(); };
+            document.getElementById('confirmModal').style.display = 'flex';
+        }
+
+        function closeModal() {
+            document.getElementById('confirmModal').style.display = 'none';
+        }
+
+        async function generateAllocation() {
+            hideError('error-msg'); hideSuccess('success-msg');
+            showModal('Generate Allocation', 'This will replace all existing allocations. Continue?', async () => {
+                const btn = document.getElementById('generateBtn');
+                btn.disabled = true; btn.innerHTML = '<span class="loading-spinner"></span>';
+                try {
+                    const resp = await API.post('/api/admin/allocation/generate', {});
+                    const data = await resp.json();
+                    if (resp.ok) { showSuccess('success-msg', `Allocation generated for ${data.allocations.length} teams`); loadAllocations(); }
+                    else { showError('error-msg', data.detail || 'Failed'); }
+                } catch (err) { showError('error-msg', err.message); }
+                btn.disabled = false; btn.innerHTML = ICONS.target + ' Generate';
+            });
+        }
+
+        async function releaseAllocation() {
+            hideError('error-msg'); hideSuccess('success-msg');
+            showModal('Release Allocation', 'Teams will be able to see their assigned challenges. Continue?', async () => {
+                const btn = document.getElementById('releaseBtn');
+                btn.disabled = true; btn.innerHTML = '<span class="loading-spinner"></span>';
+                try {
+                    const resp = await API.post('/api/admin/allocation/release', {});
+                    const data = await resp.json();
+                    if (resp.ok) { showSuccess('success-msg', `Released ${data.count} allocations`); loadAllocations(); }
+                    else { showError('error-msg', data.detail || 'Failed'); }
+                } catch (err) { showError('error-msg', err.message); }
+                btn.disabled = false; btn.innerHTML = ICONS.play + ' Release';
+            });
+        }
+
+        async function loadAllocations() {
+            const statusResp = await API.get('/api/admin/event/status');
+            let eventLocked = false;
+            if (statusResp) {
+                const statusData = await statusResp.json();
+                const computed = statusData.computed_status;
+                if (computed === 'ONGOING' || computed === 'COMPLETED') {
+                    eventLocked = true;
+                    document.getElementById('allocNotice').style.display = '';
+                    document.getElementById('allocNotice').textContent = 'Allocation is locked because the event has ' + (computed === 'ONGOING' ? 'already started' : 'ended') + '.';
+                }
+            }
+            const resp = await API.get('/api/admin/allocation');
+            if (!resp) return;
+            const data = await resp.json();
+            const state = data.allocation_state || 'PENDING';
+            renderState(state);
+            document.getElementById('generateBtn').disabled = eventLocked || state === 'RELEASED';
+            document.getElementById('releaseBtn').disabled = eventLocked || state !== 'GENERATED';
+            if (data.allocations.length === 0) {
+                document.getElementById('allocationContent').innerHTML = '<div class="empty-state"><div class="empty-icon">' + ICONS.inbox + '</div><h3>No allocations yet</h3><p>Click "Generate" to assign challenges to teams</p></div>';
+                return;
+            }
+            let html = '<div class="table-container"><table><thead><tr><th>Team Code</th><th>Challenge</th><th>Bin</th><th>State</th><th>Allocated At</th></tr></thead><tbody>';
+            for (const a of data.allocations) {
+                const stateLabel = a.released ? '<span class="badge badge-success">Released</span>' : '<span class="badge badge-warning">Generated</span>';
+                html += `<tr><td><strong class="font-mono">${escapeHtml(a.team_code)}</strong></td><td><span class="badge badge-info">${escapeHtml(a.challenge_code)}</span></td><td>${escapeHtml(a.bin_number)}</td><td>${stateLabel}</td><td>${formatDate(a.allocated_at)}</td></tr>`;
+            }
+            html += '</tbody></table></div>';
+            document.getElementById('allocationContent').innerHTML = html;
+        }
+        loadAllocations();
+    </script>
+</body>
+</html>
