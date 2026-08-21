@@ -77,8 +77,10 @@ async def participant_dashboard(user=Depends(get_participant_user)):
         if ch:
             challenge_info = {
                 "challenge_code": ch["challenge_code"],
+                "challenge_name": ch.get("challenge_name", ch.get("name", ch.get("title", ""))),
                 "language": ch.get("language", ""),
                 "difficulty": ch.get("difficulty", ""),
+                "description": ch.get("description", ""),
             }
 
     allow_multiple = event_settings.get("allow_multiple_submissions", False) if event_settings else False

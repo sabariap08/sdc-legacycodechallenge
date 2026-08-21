@@ -173,6 +173,8 @@ async def get_code_details(user=Depends(get_participant_user)):
     challenge_code = alloc["challenge_code"]
     team = await db.teams.find_one({"team_code": team_code})
 
+    ch = await db.challenges.find_one({"challenge_code": challenge_code})
+
     event_settings = await db.event_settings.find_one({})
     event_start = event_settings.get("event_start_time") if event_settings else None
     event_end = event_settings.get("event_end_time") if event_settings else None
@@ -181,6 +183,9 @@ async def get_code_details(user=Depends(get_participant_user)):
         "team_code": team_code,
         "team_name": team.get("team_name", "") if team else "",
         "challenge_code": challenge_code,
+        "challenge_name": ch.get("challenge_name", ch.get("name", ch.get("title", challenge_code))) if ch else challenge_code,
+        "language": ch.get("language", "") if ch else "",
+        "difficulty": ch.get("difficulty", "") if ch else "",
         "bin_number": team.get("bin_number", "") if team else "",
         "event_start": event_start.isoformat() if event_start else None,
         "event_end": event_end.isoformat() if event_end else None,

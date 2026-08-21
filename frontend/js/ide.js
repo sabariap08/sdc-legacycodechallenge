@@ -75,7 +75,7 @@ async function loadIDE() {
         if (!resp) return;
         codeDetails = await resp.json();
         document.getElementById('ideTeamName').textContent = codeDetails.team_name;
-        document.getElementById('ideChallenge').textContent = codeDetails.challenge_code;
+        document.getElementById('ideChallenge').textContent = codeDetails.challenge_name || codeDetails.challenge_code;
 
         try {
             const timeResp = await fetch('/api/server-time');

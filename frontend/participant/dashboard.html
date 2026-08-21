@@ -277,6 +277,13 @@
                 </div>
                 <div id="countdownSection"></div>
                 <div class="stat-row" id="statRow"></div>
+
+                <div class="card mb-3" style="border:2px solid var(--primary);position:relative;overflow:hidden;">
+                    <div style="position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,var(--primary),var(--secondary),var(--accent));background-size:200% 100%;animation:shimmer 3s linear infinite;"></div>
+                    <div class="card-header"><h3 style="color:var(--primary);">Assigned Challenge</h3></div>
+                    <div id="challengeInfo" style="text-align:center;padding:24px;"><span class="loading-spinner"></span></div>
+                </div>
+
                 <div class="grid-2 mb-3">
                     <div class="card">
                         <div class="card-header"><h3>Team Members</h3></div>
@@ -288,10 +295,6 @@
                             <div style="font-size:28px; font-weight:700; color:var(--secondary); font-family:var(--font-mono);" id="binNumber">-</div>
                         </div>
                     </div>
-                </div>
-                <div class="card mb-3">
-                    <div class="card-header"><h3>Challenge</h3></div>
-                    <div id="challengeInfo" style="text-align:center; padding:24px;"><span class="loading-spinner"></span></div>
                 </div>
                 <div class="grid-2">
                     <div class="card">
@@ -353,11 +356,37 @@
 
             const alloc = data.allocation;
             if (alloc && alloc.released && alloc.challenge_code) {
+                const ch = data.challenge || {};
+                const challengeName = ch.challenge_name || ch.language || alloc.challenge_code;
+                const difficulty = ch.difficulty || '';
+                const language = ch.language || '';
+                const diffColors = { 'easy': '#22c55e', 'medium': '#f59e0b', 'hard': '#ef4444' };
+                const diffColor = diffColors[difficulty.toLowerCase()] || 'var(--text-muted)';
                 document.getElementById('challengeInfo').innerHTML = `
                     <div class="challenge-reveal">
-                        <div class="challenge-code">${escapeHtml(alloc.challenge_code)}</div>
-                        <p style="color:var(--text-secondary); margin:8px 0 16px; font-size:14px;">Your challenge has been assigned!</p>
-                        <div class="ide-cta-wrap"><a href="/participant/ide" class="btn btn-primary" style="width:auto;border-radius:var(--radius-full);padding:12px 28px;font-size:14px;font-weight:600;">${ICONS.code} Open IDE</a></div>
+                        <div style="font-size:13px; color:var(--text-muted); text-transform:uppercase; letter-spacing:1px; margin-bottom:8px;">Your Assigned Challenge</div>
+                        <div class="challenge-code">${escapeHtml(challengeName)}</div>
+                        <div style="margin:12px 0 20px; display:flex; gap:10px; justify-content:center; flex-wrap:wrap;">
+                            <span style="font-size:12px; padding:4px 12px; border-radius:var(--radius-full); background:rgba(6,182,212,.1); color:var(--secondary); border:1px solid rgba(6,182,212,.2); font-family:var(--font-mono);">${escapeHtml(alloc.challenge_code)}</span>
+                            ${language ? '<span style="font-size:12px; padding:4px 12px; border-radius:var(--radius-full); background:rgba(99,102,241,.1); color:var(--primary); border:1px solid rgba(99,102,241,.2);">' + escapeHtml(language) + '</span>' : ''}
+                            ${difficulty ? '<span style="font-size:12px; padding:4px 12px; border-radius:var(--radius-full); background:rgba(255,255,255,.05); color:' + diffColor + '; border:1px solid ' + diffColor + '30; text-transform:uppercase; font-weight:600;">' + escapeHtml(difficulty) + '</span>' : ''}
+                        </div>
+                        ${ch.description ? '<p style="color:var(--text-secondary); font-size:14px; margin-bottom:20px; max-width:500px; margin-left:auto; margin-right:auto; line-height:1.6;">' + escapeHtml(ch.description) + '</p>' : ''}
+                        <div class="ide-cta-wrap" style="margin-top:16px;">
+                            <a href="/participant/ide" class="btn" style="
+                                display:inline-flex; align-items:center; gap:10px;
+                                padding:16px 40px; font-size:16px; font-weight:700;
+                                border-radius:var(--radius-full); text-decoration:none; color:white;
+                                background:linear-gradient(135deg, #6366f1, #06b6d4);
+                                box-shadow:0 4px 20px rgba(99,102,241,.4), 0 0 40px rgba(6,182,212,.2);
+                                transition:all .3s ease; position:relative; overflow:hidden;
+                                animation:glowPulse 3s ease infinite;
+                            " onmouseover="this.style.transform='translateY(-3px) scale(1.02)'; this.style.boxShadow='0 8px 30px rgba(99,102,241,.5), 0 0 60px rgba(6,182,212,.3)';" onmouseout="this.style.transform=''; this.style.boxShadow='0 4px 20px rgba(99,102,241,.4), 0 0 40px rgba(6,182,212,.2)';">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+                                Start Challenge
+                                <span style="position:absolute;inset:0;background:linear-gradient(90deg,transparent,rgba(255,255,255,.15),transparent);animation:shimmer 2.5s infinite;background-size:200% 100%;"></span>
+                            </a>
+                        </div>
                     </div>`;
                 const ideLink = document.getElementById('ideLink');
                 if (ideLink) ideLink.style.display = '';

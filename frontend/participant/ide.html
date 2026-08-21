@@ -16,12 +16,15 @@
                 </button>
                 <span class="ide-logo">Bug Buster IDE</span>
                 <span class="ide-sep hide-mobile">|</span>
-                <span class="hide-mobile">Team: <strong id="ideTeamName">-</strong></span>
+                <span class="hide-mobile" style="display:flex;align-items:center;gap:4px;">Team: <strong id="ideTeamName">-</strong></span>
                 <span class="ide-sep hide-mobile">|</span>
-                <span class="hide-mobile">Challenge: <strong id="ideChallenge">-</strong></span>
+                <span class="hide-mobile" style="display:flex;align-items:center;gap:4px;">Challenge: <strong id="ideChallenge" style="color:var(--primary);">-</strong></span>
             </div>
             <div class="ide-header-center">
-                <span id="timerDisplay" class="ide-timer">--:--:--</span>
+                <div class="ide-timer-wrap">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                    <span id="timerDisplay" class="ide-timer">--:--:--</span>
+                </div>
             </div>
             <div class="ide-header-right">
                 <button id="ideThemeToggle" class="btn-icon" onclick="toggleIDEMode()" title="Toggle theme"></button>
