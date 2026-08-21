@@ -1,0 +1,53 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard - Legacy Code Rescue</title>
+    <link rel="stylesheet" href="/static/css/styles.css">
+</head>
+<body>
+    <script src="/static/js/api.js"></script>
+    <script>
+        if (!API.isLoggedIn() || API.role !== 'admin') { window.location.href = '/login'; }
+        function logout() { API.clearAuth(); window.location.href = '/login'; }
+        document.body.innerHTML = renderAdminLayout('dashboard', 'Dashboard');
+        initTheme();
+        document.getElementById('pageContent').innerHTML = `
+            <div class="page-header with-actions">
+                <div>
+                    <h1>Dashboard</h1>
+                    <p>Overview of the Legacy Code Rescue event</p>
+                </div>
+            </div>
+            <div class="stats-grid" id="statsGrid"></div>
+            <div class="card">
+                <div class="card-header"><h3>Challenge Distribution</h3></div>
+                <div id="challengeDistribution"><div class="flex-center" style="padding:24px;"><span class="loading-spinner"></span></div></div>
+            </div>
+        `;
+        async function loadDashboard() {
+            try {
+                const resp = await API.get('/api/admin/dashboard');
+                if (!resp) return;
+                const data = await resp.json();
+                document.getElementById('statsGrid').innerHTML = `
+                    <div class="stat-card"><div class="stat-header"><span class="stat-label">Total Teams</span><span class="stat-icon primary">${ICONS.teams}</span></div><div class="stat-value">${data.total_teams}</div></div>
+                    <div class="stat-card"><div class="stat-header"><span class="stat-label">Participants</span><span class="stat-icon secondary">${ICONS.users}</span></div><div class="stat-value">${data.total_participants}</div></div>
+                    <div class="stat-card"><div class="stat-header"><span class="stat-label">Ready Challenges</span><span class="stat-icon success">${ICONS.checkCircle}</span></div><div class="stat-value">${data.ready_challenges}</div></div>
+                    <div class="stat-card"><div class="stat-header"><span class="stat-label">Submissions</span><span class="stat-icon warning">${ICONS.fileText}</span></div><div class="stat-value">${data.total_submissions}</div></div>
+                    <div class="stat-card"><div class="stat-header"><span class="stat-label">Event Status</span><span class="stat-icon primary">${ICONS.clock}</span></div><div class="stat-value" style="font-size:14px;margin-top:4px;">${getStatusBadge(data.event_status)}</div></div>
+                `;
+                let distHtml = '<div class="table-container"><table><thead><tr><th>Challenge</th><th>Status</th><th>Teams</th></tr></thead><tbody>';
+                for (const ch of data.challenge_distribution) {
+                    distHtml += `<tr><td><strong>${escapeHtml(ch.challenge_code)}</strong></td><td>${getStatusBadge(ch.status)}</td><td>${ch.allocated_teams}</td></tr>`;
+                }
+                distHtml += '</tbody></table></div>';
+                if (data.challenge_distribution.length === 0) distHtml = '<div class="empty-state"><div class="empty-icon">' + ICONS.inbox + '</div><h3>No challenges imported</h3><p>Import repositories from the Repositories page</p></div>';
+                document.getElementById('challengeDistribution').innerHTML = distHtml;
+            } catch (err) { console.error('Dashboard load error:', err); }
+        }
+        loadDashboard();
+    </script>
+</body>
+</html>

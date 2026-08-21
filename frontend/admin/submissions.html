@@ -1,0 +1,69 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Submissions - Legacy Code Rescue</title>
+    <link rel="stylesheet" href="/static/css/styles.css">
+</head>
+<body>
+    <script src="/static/js/api.js"></script>
+    <script>
+        if (!API.isLoggedIn() || API.role !== 'admin') { window.location.href = '/login'; }
+        function logout() { API.clearAuth(); window.location.href = '/login'; }
+        document.body.innerHTML = renderAdminLayout('submissions', 'Submissions');
+        initTheme();
+        document.getElementById('pageContent').innerHTML = `
+            <div class="page-header"><h1>Submissions</h1><p>View all team submissions and evaluations</p></div>
+            <div class="card">
+                <div id="subContent"><div class="flex-center" style="padding:24px;"><span class="loading-spinner"></span></div></div>
+            </div>
+            <div id="detailModal" class="modal-overlay">
+                <div class="modal" style="max-width:600px;">
+                    <div class="modal-header"><h3>Evaluation Details</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
+                    <div id="detailContent"></div>
+                </div>
+            </div>
+        `;
+        function closeModal() { document.getElementById('detailModal').classList.remove('active'); }
+        async function loadSubmissions() {
+            const resp = await API.get('/api/admin/leaderboard');
+            if (!resp) return;
+            const data = await resp.json();
+            if (data.leaderboard.length === 0) {
+                document.getElementById('subContent').innerHTML = '<div class="empty-state"><div class="empty-icon">' + ICONS.inbox + '</div><h3>No submissions yet</h3><p>Submissions will appear here as teams submit their work</p></div>';
+                return;
+            }
+            let html = '<div class="table-container"><table><thead><tr><th>Rank</th><th>Team</th><th>Challenge</th><th>Score</th><th>Submitted</th><th>Details</th></tr></thead><tbody>';
+            for (const s of data.leaderboard) {
+                html += `<tr><td><strong>#${s.rank}</strong></td><td><strong>${escapeHtml(s.team_name)}</strong><br><small class="text-muted font-mono">${escapeHtml(s.team_code)}</small></td><td>${escapeHtml(s.challenge_code)}</td><td><strong>${s.score}</strong></td><td>${formatDate(s.submitted_at)}</td><td><button class="btn btn-sm btn-secondary" onclick="viewDetails('${s.team_code}')">View</button></td></tr>`;
+            }
+            html += '</tbody></table></div>';
+            document.getElementById('subContent').innerHTML = html;
+        }
+        async function viewDetails(teamCode) {
+            const resp = await API.get('/api/admin/teams/' + teamCode);
+            if (!resp) return;
+            const data = await resp.json();
+            document.getElementById('detailModal').classList.add('active');
+            let html = `<p><strong>Team:</strong> ${escapeHtml(data.team.team_name)} <span class="font-mono">(${escapeHtml(data.team.team_code)})</span></p>`;
+            html += `<p><strong>Bin:</strong> ${escapeHtml(data.team.bin_number)}</p>`;
+            if (data.submission) {
+                html += `<div style="margin-top:12px; padding:12px; background:var(--bg-input); border:1px solid var(--border); border-radius:var(--radius);">`;
+                html += `<p><strong>Score:</strong> ${data.submission.score}/${data.submission.total}</p>`;
+                if (data.submission.evaluation_result && data.submission.evaluation_result.results) {
+                    html += '<div style="margin-top:8px;">';
+                    for (const r of data.submission.evaluation_result.results) {
+                        const icon = r.passed ? '<span style="color:var(--success);">[PASS]</span>' : '<span style="color:var(--danger);">[FAIL]</span>';
+                        html += `<div style="padding:4px 0; font-size:13px;">${icon} ${escapeHtml(r.test)} ${r.passed ? '' : '- ' + escapeHtml(r.reason || '')}</div>`;
+                    }
+                    html += '</div>';
+                }
+                html += '</div>';
+            }
+            document.getElementById('detailContent').innerHTML = html;
+        }
+        loadSubmissions();
+    </script>
+</body>
+</html>

@@ -1,0 +1,52 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Audit Logs - Legacy Code Rescue</title>
+    <link rel="stylesheet" href="/static/css/styles.css">
+</head>
+<body>
+    <script src="/static/js/api.js"></script>
+    <script>
+        if (!API.isLoggedIn() || API.role !== 'admin') { window.location.href = '/login'; }
+        function logout() { API.clearAuth(); window.location.href = '/login'; }
+        document.body.innerHTML = renderAdminLayout('audit', 'Audit Logs');
+        initTheme();
+        document.getElementById('pageContent').innerHTML = `
+            <div class="page-header"><h1>Audit Logs</h1><p>System activity log</p></div>
+            <div class="card">
+                <div class="card-header">
+                    <div style="flex:1; max-width:320px;">
+                        <input type="text" id="searchInput" placeholder="Search audit logs..." oninput="debounceSearch()" style="width:100%; padding:8px 12px; background:var(--bg-input); border:1px solid var(--border); border-radius:var(--radius); color:var(--text-primary); font-size:13px; font-family:var(--font-sans);">
+                    </div>
+                </div>
+                <div id="auditContent"><div class="flex-center" style="padding:24px;"><span class="loading-spinner"></span></div></div>
+            </div>
+        `;
+        let searchTimeout;
+        function debounceSearch() {
+            clearTimeout(searchTimeout);
+            searchTimeout = setTimeout(() => loadLogs(), 300);
+        }
+        async function loadLogs() {
+            const search = document.getElementById('searchInput').value.trim();
+            const url = '/api/admin/audit-logs' + (search ? '?search=' + encodeURIComponent(search) : '');
+            const resp = await API.get(url);
+            if (!resp) return;
+            const data = await resp.json();
+            if (data.logs.length === 0) {
+                document.getElementById('auditContent').innerHTML = '<div class="empty-state"><div class="empty-icon">' + ICONS.inbox + '</div><h3>No audit logs found</h3>' + (search ? '<p>No matching records for "' + escapeHtml(search) + '"</p>' : '') + '</div>';
+                return;
+            }
+            let html = '<div class="table-container"><table><thead><tr><th>Timestamp</th><th>Action</th><th>Actor</th><th>Details</th></tr></thead><tbody>';
+            for (const log of data.logs) {
+                html += `<tr><td><small class="text-muted">${formatDate(log.timestamp)}</small></td><td><span class="badge badge-info">${escapeHtml(log.action)}</span></td><td>${escapeHtml(log.actor)}</td><td><small>${escapeHtml(log.details || '')}</small></td></tr>`;
+            }
+            html += '</tbody></table></div>';
+            document.getElementById('auditContent').innerHTML = html;
+        }
+        loadLogs();
+    </script>
+</body>
+</html>

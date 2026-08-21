@@ -1,0 +1,241 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Event Control - Legacy Code Rescue</title>
+    <link rel="stylesheet" href="/static/css/styles.css">
+    <style>
+        .status-hero { text-align:center; padding:28px; margin-bottom:20px; background:var(--bg-card); border:1px solid var(--border); border-radius:var(--radius-md); }
+        .status-hero .status-label { font-size:12px; font-weight:600; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:8px; }
+        .status-hero .status-value { font-size:28px; font-weight:700; margin-bottom:4px; }
+        .status-hero .status-value.upcoming { color:var(--warning); }
+        .status-hero .status-value.ongoing { color:var(--success); }
+        .status-hero .status-value.completed { color:var(--danger); }
+        .status-hero .status-value.draft { color:var(--text-muted); }
+        .countdown-display { display:flex; justify-content:center; gap:12px; margin-top:16px; }
+        .countdown-block { text-align:center; }
+        .countdown-block .countdown-num { font-size:32px; font-weight:700; color:var(--primary); font-family:var(--font-mono); min-width:64px; display:block; }
+        .countdown-block .countdown-label { font-size:11px; color:var(--text-muted); text-transform:uppercase; }
+        .toggle-group { display:flex; gap:4px; background:var(--bg-input); border-radius:var(--radius); padding:4px; }
+        .toggle-btn { flex:1; padding:8px 16px; border:none; background:transparent; border-radius:var(--radius-sm); font-size:13px; font-weight:600; color:var(--text-muted); cursor:pointer; transition:var(--transition); font-family:var(--font-sans); }
+        .toggle-btn.active { background:var(--bg-card); color:var(--text-primary); box-shadow:var(--shadow-sm); }
+        .toggle-btn.yes-active { background:var(--success-bg); color:var(--success); }
+        .toggle-btn.no-active { background:var(--danger-bg); color:var(--danger); }
+    </style>
+</head>
+<body>
+    <script src="/static/js/api.js"></script>
+    <script>
+        if (!API.isLoggedIn() || API.role !== 'admin') { window.location.href = '/login'; }
+        function logout() { API.clearAuth(); window.location.href = '/login'; }
+        document.body.innerHTML = renderAdminLayout('event', 'Event Control');
+        initTheme();
+        document.getElementById('pageContent').innerHTML = `
+            <div class="page-header"><h1>Event Control</h1><p>Configure and manage the event lifecycle</p></div>
+            <div id="error-msg" class="error-message"></div>
+            <div id="success-msg" class="success-message"></div>
+            <div class="status-hero" id="statusHero">
+                <div class="status-label">Current Event Status</div>
+                <div class="status-value draft" id="statusValue">Loading...</div>
+                <div id="countdownDisplay"></div>
+            </div>
+            <div class="grid-2 mb-3">
+                <div class="card">
+                    <div class="card-header"><h3>Event Timing</h3></div>
+                    <form id="settingsForm">
+                        <div class="form-group"><label>Start Date & Time <span style="color:var(--danger);">*</span></label><input type="datetime-local" id="startTime" required></div>
+                        <div class="form-group"><label>End Date & Time <span style="color:var(--danger);">*</span></label><input type="datetime-local" id="endTime" required></div>
+                        <div class="form-group"><label>Duration Limit (minutes)</label><input type="number" id="duration" min="5" max="1440" value="300"><small style="color:var(--text-muted); font-size:11px; margin-top:4px; display:block;">Maximum allowed time per participant after event starts</small></div>
+                        <div class="form-group">
+                            <label>Allow Multiple Submissions</label>
+                            <div class="toggle-group" id="multiToggle">
+                                <button type="button" class="toggle-btn" onclick="setMulti(true, this)">Yes</button>
+                                <button type="button" class="toggle-btn active no-active" onclick="setMulti(false, this)">No</button>
+                            </div>
+                            <input type="hidden" id="multiSubmissions" value="false">
+                        </div>
+                        <button type="submit" class="btn btn-primary" style="width:100%;">${ICONS.save} Save Configuration</button>
+                    </form>
+                </div>
+                <div class="card">
+                    <div class="card-header"><h3>Event Actions</h3></div>
+                    <div style="display:flex; flex-direction:column; gap:12px;">
+                        <div style="padding:16px; background:var(--bg-input); border:1px solid var(--border); border-radius:var(--radius);">
+                            <p style="font-size:13px; font-weight:600; margin-bottom:4px;">Restart Event</p>
+                            <p style="font-size:12px; color:var(--text-muted); margin-bottom:12px;">Reset the event lifecycle. Allocations, submissions, and workspaces will be cleared. Teams and repositories are preserved.</p>
+                            <button class="btn btn-danger btn-sm" onclick="showRestartModal()">${ICONS.alertCircle} Restart Event</button>
+                        </div>
+                        <div style="padding:16px; background:var(--bg-input); border:1px solid var(--border); border-radius:var(--radius);">
+                            <p style="font-size:13px; font-weight:600; margin-bottom:4px;">Blocked Users</p>
+                            <p style="font-size:12px; color:var(--text-muted); margin-bottom:12px;">Manage email blocks for participants.</p>
+                            <button class="btn btn-secondary btn-sm" onclick="showBlockModal()">${ICONS.ban} Manage Blocked Users</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div id="blockModal" class="modal-overlay">
+                <div class="modal" style="max-width:440px;">
+                    <div class="modal-header"><h3>Block Email</h3><button class="modal-close" onclick="closeBlockModal()">&times;</button></div>
+                    <div class="form-group"><label>Email Address</label><input type="email" id="blockEmail" placeholder="user@example.com"></div>
+                    <div class="form-group"><label>Reason (optional)</label><input type="text" id="blockReason" placeholder="e.g. Cheating attempt"></div>
+                    <div class="modal-footer">
+                        <button class="btn btn-secondary" onclick="closeBlockModal()">Cancel</button>
+                        <button class="btn btn-danger" onclick="blockUser()">Block</button>
+                    </div>
+                </div>
+            </div>
+            <div id="blockedUsersSection" class="card mt-2" style="display:none;">
+                <div class="card-header"><h3>Blocked Users</h3></div>
+                <div id="blockedUsersList"><div class="flex-center" style="padding:16px;"><span class="loading-spinner"></span></div></div>
+            </div>
+            <div id="restartModal" class="modal-overlay">
+                <div class="modal" style="max-width:440px;">
+                    <div class="modal-header"><h3>Restart Event?</h3><button class="modal-close" onclick="closeRestartModal()">&times;</button></div>
+                    <p style="font-size:13px; color:var(--text-secondary); margin-bottom:12px;">Restarting the event will reset the event lifecycle and may affect existing participant progress/submissions. Are you sure you want to continue?</p>
+                    <p style="font-size:12px; color:var(--warning); margin-bottom:4px;">This will clear: allocations, submissions, workspaces, checkins.</p>
+                    <p style="font-size:12px; color:var(--success);">Preserved: teams, repositories, audit logs.</p>
+                    <div class="modal-footer">
+                        <button class="btn btn-secondary" onclick="closeRestartModal()">Cancel</button>
+                        <button class="btn btn-danger" onclick="confirmRestart()" id="restartConfirmBtn">Confirm Restart</button>
+                    </div>
+                </div>
+            </div>
+        `;
+        let currentSettings = null;
+        function setMulti(val, btn) {
+            document.getElementById('multiSubmissions').value = val ? 'true' : 'false';
+            const btns = document.querySelectorAll('#multiToggle .toggle-btn');
+            btns.forEach(b => { b.classList.remove('active', 'yes-active', 'no-active'); });
+            btn.classList.add('active');
+            btn.classList.add(val ? 'yes-active' : 'no-active');
+        }
+        function showBlockModal() { document.getElementById('blockModal').classList.add('active'); document.getElementById('blockedUsersSection').style.display = ''; loadBlockedUsers(); }
+        function closeBlockModal() { document.getElementById('blockModal').classList.remove('active'); }
+        function showRestartModal() { document.getElementById('restartModal').classList.add('active'); }
+        function closeRestartModal() { document.getElementById('restartModal').classList.remove('active'); }
+        async function confirmRestart() {
+            const btn = document.getElementById('restartConfirmBtn');
+            btn.disabled = true; btn.innerHTML = '<span class="loading-spinner"></span> Restarting...';
+            try {
+                const resp = await API.post('/api/admin/event/restart', { confirm: true });
+                const data = await resp.json();
+                if (resp.ok) { closeRestartModal(); showSuccess('success-msg', data.message); loadStatus(); }
+                else { showError('error-msg', data.detail || 'Failed'); }
+            } catch (err) { showError('error-msg', err.message); }
+            btn.disabled = false; btn.innerHTML = 'Confirm Restart';
+        }
+        async function blockUser() {
+            const email = document.getElementById('blockEmail').value.trim();
+            const reason = document.getElementById('blockReason').value.trim();
+            if (!email) return;
+            const resp = await API.post('/api/admin/blocked-users', { email, reason });
+            if (resp && resp.ok) { closeBlockModal(); document.getElementById('blockEmail').value = ''; document.getElementById('blockReason').value = ''; loadBlockedUsers(); }
+            else { const data = resp ? await resp.json() : {}; alert(data.detail || 'Failed'); }
+        }
+        async function unblockUser(email) {
+            if (!confirm('Unblock ' + email + '?')) return;
+            await API.del('/api/admin/blocked-users/' + encodeURIComponent(email));
+            loadBlockedUsers();
+        }
+        async function loadBlockedUsers() {
+            const resp = await API.get('/api/admin/blocked-users');
+            if (!resp) return;
+            const data = await resp.json();
+            if (data.blocked_users.length === 0) {
+                document.getElementById('blockedUsersList').innerHTML = '<p class="text-muted text-sm" style="padding:12px;">No blocked users</p>';
+                return;
+            }
+            let html = '';
+            for (const u of data.blocked_users) {
+                html += '<div class="blocked-user"><div class="user-info"><div class="avatar" style="font-size:11px; font-weight:700;">BLOCK</div><div><div style="font-size:13px; font-weight:600;">' + escapeHtml(u.email) + '</div><div style="font-size:11px; color:var(--text-muted);">' + (u.reason ? escapeHtml(u.reason) + ' | ' : '') + formatDate(u.blocked_at) + '</div></div></div><button class="btn btn-sm btn-secondary" onclick="unblockUser(\'' + escapeHtml(u.email) + '\')">Unblock</button></div>';
+            }
+            document.getElementById('blockedUsersList').innerHTML = html;
+        }
+        async function loadStatus() {
+            const resp = await API.get('/api/admin/event/status');
+            if (!resp) return;
+            const data = await resp.json();
+            currentSettings = data.settings;
+            const computed = data.computed_status;
+            const statusEl = document.getElementById('statusValue');
+            const heroEl = document.getElementById('statusHero');
+            const countdownEl = document.getElementById('countdownDisplay');
+            statusEl.textContent = computed;
+            statusEl.className = 'status-value ' + computed.toLowerCase();
+            if (data.settings) {
+                if (data.settings.event_start_time) document.getElementById('startTime').value = new Date(data.settings.event_start_time).toISOString().slice(0, 16);
+                if (data.settings.event_end_time) document.getElementById('endTime').value = new Date(data.settings.event_end_time).toISOString().slice(0, 16);
+                document.getElementById('duration').value = data.settings.event_duration_minutes || 300;
+                const multi = data.settings.allow_multiple_submissions || false;
+                document.getElementById('multiSubmissions').value = multi ? 'true' : 'false';
+                const btns = document.querySelectorAll('#multiToggle .toggle-btn');
+                btns.forEach(b => { b.classList.remove('active', 'yes-active', 'no-active'); });
+                if (multi) { btns[0].classList.add('active', 'yes-active'); }
+                else { btns[1].classList.add('active', 'no-active'); }
+            }
+            countdownEl.innerHTML = '';
+            if (computed === 'UPCOMING' && data.countdown_seconds !== null && data.countdown_seconds !== undefined) {
+                startCountdown(data.countdown_seconds, 'countdownDisplay', 'Event starts in');
+            } else if (computed === 'ONGOING' && data.remaining_seconds !== null && data.remaining_seconds !== undefined) {
+                startCountdown(data.remaining_seconds, 'countdownDisplay', 'Time remaining');
+            }
+            if (computed === 'ONGOING' || computed === 'COMPLETED') {
+                document.getElementById('startTime').disabled = true;
+                document.getElementById('endTime').disabled = true;
+                document.getElementById('duration').disabled = true;
+            } else {
+                document.getElementById('startTime').disabled = false;
+                document.getElementById('endTime').disabled = false;
+                document.getElementById('duration').disabled = false;
+            }
+        }
+        function startCountdown(seconds, elementId, label) {
+            let remaining = seconds;
+            const el = document.getElementById(elementId);
+            function update() {
+                if (remaining <= 0) { el.innerHTML = '<p style="font-size:14px; color:var(--text-muted);">Reloading...</p>'; setTimeout(() => loadStatus(), 2000); return; }
+                const d = Math.floor(remaining / 86400);
+                const h = Math.floor((remaining % 86400) / 3600);
+                const m = Math.floor((remaining % 3600) / 60);
+                const s = remaining % 60;
+                let html = '<div class="countdown-display">';
+                if (d > 0) html += '<div class="countdown-block"><span class="countdown-num">' + String(d).padStart(2, '0') + '</span><span class="countdown-label">Days</span></div>';
+                html += '<div class="countdown-block"><span class="countdown-num">' + String(h).padStart(2, '0') + '</span><span class="countdown-label">Hours</span></div>';
+                html += '<div class="countdown-block"><span class="countdown-num">' + String(m).padStart(2, '0') + '</span><span class="countdown-label">Min</span></div>';
+                html += '<div class="countdown-block"><span class="countdown-num">' + String(s).padStart(2, '0') + '</span><span class="countdown-label">Sec</span></div>';
+                html += '</div>';
+                el.innerHTML = html;
+                remaining--;
+                setTimeout(update, 1000);
+            }
+            update();
+        }
+        document.getElementById('settingsForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            hideError('error-msg'); hideSuccess('success-msg');
+            const st = document.getElementById('startTime').value;
+            const et = document.getElementById('endTime').value;
+            const dur = parseInt(document.getElementById('duration').value);
+            const multi = document.getElementById('multiSubmissions').value === 'true';
+            if (!st || !et) { showError('error-msg', 'Start and End times are required'); return; }
+            const startDt = new Date(st);
+            const endDt = new Date(et);
+            if (endDt <= startDt) { showError('error-msg', 'End time must be after start time'); return; }
+            if (!dur || dur < 5) { showError('error-msg', 'Duration must be at least 5 minutes'); return; }
+            const body = {
+                event_start_time: startDt.toISOString(),
+                event_end_time: endDt.toISOString(),
+                event_duration_minutes: dur,
+                allow_multiple_submissions: multi
+            };
+            try {
+                const resp = await API.put('/api/admin/event/settings', body);
+                if (resp && resp.ok) { showSuccess('success-msg', 'Event configuration saved'); loadStatus(); }
+                else { const data = resp ? await resp.json() : {}; showError('error-msg', data.detail || 'Failed to save'); }
+            } catch (err) { showError('error-msg', err.message); }
+        });
+        loadStatus();
+    </script>
+</body>
+</html>

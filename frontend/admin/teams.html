@@ -1,0 +1,128 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Teams - Legacy Code Rescue</title>
+    <link rel="stylesheet" href="/static/css/styles.css">
+</head>
+<body>
+    <script src="/static/js/api.js"></script>
+    <script>
+        if (!API.isLoggedIn() || API.role !== 'admin') { window.location.href = '/login'; }
+        function logout() { API.clearAuth(); window.location.href = '/login'; }
+        document.body.innerHTML = renderAdminLayout('teams', 'Teams');
+        initTheme();
+        document.getElementById('pageContent').innerHTML = `
+            <div class="page-header with-actions">
+                <div>
+                    <h1>Teams</h1>
+                    <p>All registered teams and participants</p>
+                </div>
+                <a href="/admin/new-team" class="btn btn-primary">${ICONS.add} New Team</a>
+            </div>
+            <div class="card">
+                <div id="teamsContent"><div class="flex-center" style="padding:24px;"><span class="loading-spinner"></span></div></div>
+            </div>
+            <div id="teamDetail" style="display:none;"></div>
+        `;
+        let currentView = 'list';
+        async function loadTeams() {
+            currentView = 'list';
+            document.getElementById('teamDetail').style.display = 'none';
+            document.querySelector('.page-content > .card').style.display = '';
+            const resp = await API.get('/api/admin/teams');
+            if (!resp) return;
+            const data = await resp.json();
+            if (data.teams.length === 0) {
+                document.getElementById('teamsContent').innerHTML = '<div class="empty-state"><div class="empty-icon">' + ICONS.teams + '</div><h3>No teams registered</h3><p>Create your first team to get started</p></div>';
+                return;
+            }
+            let html = '<div class="table-container"><table><thead><tr><th>Team Code</th><th>Team Name</th><th>Bin</th><th>Members</th><th>Status</th><th>Actions</th></tr></thead><tbody>';
+            for (const t of data.teams) {
+                html += `<tr>
+                    <td><strong class="font-mono">${escapeHtml(t.team_code)}</strong></td>
+                    <td>${escapeHtml(t.team_name)}</td>
+                    <td><span class="badge badge-neutral">${escapeHtml(t.bin_number)}</span></td>
+                    <td>${t.participant_count}</td>
+                    <td>${getStatusBadge(t.status)}</td>
+                    <td>
+                        <div class="flex gap-1">
+                            <button class="btn btn-sm btn-secondary" onclick="viewTeam('${t.team_code}')">View</button>
+                            <button class="btn btn-sm btn-danger" onclick="deleteTeam('${t.team_code}', '${escapeHtml(t.team_name)}')">Delete</button>
+                        </div>
+                    </td>
+                </tr>`;
+            }
+            html += '</tbody></table></div>';
+            document.getElementById('teamsContent').innerHTML = html;
+        }
+        async function viewTeam(code) {
+            const resp = await API.get(`/api/admin/teams/${code}`);
+            if (!resp) return;
+            const data = await resp.json();
+            const t = data.team;
+            let participantsHtml = '';
+            for (const p of data.participants) {
+                participantsHtml += `<div style="padding:12px; background:var(--bg-input); border:1px solid var(--border); border-radius:var(--radius); margin-bottom:8px;">
+                    <div class="flex-between" style="flex-wrap:wrap; gap:4px;">
+                        <div>
+                            <strong>${p.is_team_leader ? '[LEADER] ' : ''}${escapeHtml(p.name)}</strong>
+                            ${p.is_team_leader ? ' <span class="badge badge-info">LEADER</span>' : ''}
+                        </div>
+                    </div>
+                    <div style="margin-top:6px; font-size:12px; color:var(--text-muted); word-break:break-word;">
+                        ${escapeHtml(p.email)} ${p.roll_number ? '| Roll: ' + escapeHtml(p.roll_number) : ''} ${p.college ? '| ' + escapeHtml(p.college) : ''} ${p.phone ? '| ' + escapeHtml(p.phone) : ''}
+                    </div>
+                </div>`;
+            }
+            let submissionHtml = '<p class="text-muted" style="font-size:13px;">No submissions yet</p>';
+            if (data.submission) {
+                submissionHtml = `<div style="padding:12px; background:var(--bg-input); border:1px solid var(--border); border-radius:var(--radius);">
+                    <p><strong>Score:</strong> ${data.submission.score}/${data.submission.total}</p>
+                    <p><strong>Submitted:</strong> ${formatDate(data.submission.submitted_at)}</p>
+                    <p><strong>Status:</strong> ${getStatusBadge(data.submission.status)}</p>
+                </div>`;
+            }
+            let allocHtml = '<p class="text-muted" style="font-size:13px;">Not allocated</p>';
+            if (data.allocation) {
+                allocHtml = `<div style="padding:12px; background:var(--bg-input); border:1px solid var(--border); border-radius:var(--radius);">
+                    <p><strong>Challenge:</strong> ${escapeHtml(data.allocation.challenge_code)}</p>
+                    <p><strong>Released:</strong> ${data.allocation.released ? '<span class="badge badge-success">Yes</span>' : '<span class="badge badge-warning">No</span>'}</p>
+                </div>`;
+            }
+            document.querySelector('.page-content > .card').style.display = 'none';
+            document.getElementById('teamDetail').style.display = 'block';
+            document.getElementById('teamDetail').innerHTML = `
+                <div class="team-detail-header">
+                    <div class="team-avatar">${escapeHtml(t.team_name.charAt(0).toUpperCase())}</div>
+                    <div class="team-info">
+                        <h2>${escapeHtml(t.team_name)}</h2>
+                        <p><span class="font-mono">${escapeHtml(t.team_code)}</span> &middot; ${escapeHtml(t.bin_number)} &middot; ${t.participant_count} members</p>
+                    </div>
+                    <div style="margin-left:auto;">
+                        <button class="btn btn-secondary btn-sm" onclick="loadTeams()">Back to List</button>
+                    </div>
+                </div>
+                <div class="grid-2 mb-3">
+                    <div class="card">
+                        <div class="card-header"><h3>Participants</h3></div>
+                        ${participantsHtml}
+                    </div>
+                    <div>
+                        <div class="card"><div class="card-header"><h3>Allocation</h3></div>${allocHtml}</div>
+                        <div class="card"><div class="card-header"><h3>Submission</h3></div>${submissionHtml}</div>
+                    </div>
+                </div>
+            `;
+        }
+        async function deleteTeam(code, name) {
+            if (!confirm(`Delete team "${name}" (${code})?\n\nThis will remove all participants, allocations, and submissions.`)) return;
+            const resp = await API.del(`/api/admin/teams/${code}`);
+            if (resp && resp.ok) { loadTeams(); }
+            else { const data = resp ? await resp.json() : {}; alert(data.detail || 'Failed to delete team'); }
+        }
+        loadTeams();
+    </script>
+</body>
+</html>
