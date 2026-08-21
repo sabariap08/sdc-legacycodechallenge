@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
 from datetime import datetime
-from app.database import connect_db, close_db
+from app.database import connect_db, close_db, is_db_available
 from app.config import CHALLENGE_STORAGE_PATH, TEAM_WORKSPACE_PATH, EVALUATOR_PATH
 from app.security import hash_password, verify_password, create_token
 from app.database import get_db
@@ -201,31 +201,36 @@ async def participant_ide_page():
     return FileResponse(os.path.join(frontend_path, "participant", "ide.html"))
 
 
+@app.get("/api/health")
+async def health_check():
+    db_ok = is_db_available()
+    return {"status": "ok" if db_ok else "degraded", "database": "connected" if db_ok else "unavailable"}
+
+
 @app.on_event("startup")
 async def startup():
-    try:
-        logger.info("Starting up...")
-        await connect_db()
-        logger.info("Database connected")
+    logger.info("Starting up...")
+    os.makedirs(os.path.abspath(CHALLENGE_STORAGE_PATH), exist_ok=True)
+    os.makedirs(os.path.abspath(TEAM_WORKSPACE_PATH), exist_ok=True)
+    os.makedirs(os.path.abspath(EVALUATOR_PATH), exist_ok=True)
 
-        os.makedirs(os.path.abspath(CHALLENGE_STORAGE_PATH), exist_ok=True)
-        os.makedirs(os.path.abspath(TEAM_WORKSPACE_PATH), exist_ok=True)
-        os.makedirs(os.path.abspath(EVALUATOR_PATH), exist_ok=True)
-
-        db = get_db()
-        from app.config import ADMIN_USERNAME, ADMIN_PASSWORD
-        existing_admin = await db.admins.find_one({"username": ADMIN_USERNAME})
-        if not existing_admin:
-            await db.admins.insert_one({
-                "username": ADMIN_USERNAME,
-                "password_hash": hash_password(ADMIN_PASSWORD),
-                "created_at": __import__("datetime").datetime.utcnow()
-            })
-            logger.info("Default admin created")
+    db = await connect_db()
+    if db is not None:
+        try:
+            from app.config import ADMIN_USERNAME, ADMIN_PASSWORD
+            existing_admin = await db.admins.find_one({"username": ADMIN_USERNAME})
+            if not existing_admin:
+                await db.admins.insert_one({
+                    "username": ADMIN_USERNAME,
+                    "password_hash": hash_password(ADMIN_PASSWORD),
+                    "created_at": __import__("datetime").datetime.utcnow()
+                })
+                logger.info("Default admin created")
+        except Exception as e:
+            logger.error("Admin seed failed: %s", e)
         logger.info("Startup complete!")
-    except Exception as e:
-        logger.error("Startup failed: %s", e, exc_info=True)
-        raise
+    else:
+        logger.warning("Startup complete (MongoDB unavailable - will retry in background)")
 
 
 @app.on_event("shutdown")

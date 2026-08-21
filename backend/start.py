@@ -1,6 +1,5 @@
 import uvicorn
 import os
-import ssl
 import certifi
 
 os.environ["SSL_CERT_FILE"] = certifi.where()
