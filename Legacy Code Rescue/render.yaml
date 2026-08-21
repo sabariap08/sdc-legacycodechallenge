@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: legacy-code-rescue
+    runtime: python
+    plan: free
+    env: python
+    buildCommand: cd backend && pip install -r requirements.txt
+    startCommand: cd backend && python start.py
+    envVars:
+      - key: MONGODB_URI
+        sync: false
+      - key: DATABASE_NAME
+        value: legacy_code_rescue
+      - key: ADMIN_USERNAME
+        value: admin
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: SECRET_KEY
+        generateValue: true
+      - key: JWT_ALGORITHM
+        value: HS256
+      - key: JWT_EXPIRE_MINUTES
+        value: "480"
