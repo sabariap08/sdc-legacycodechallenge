@@ -1,4 +1,13 @@
 import os
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+
+logger = logging.getLogger(__name__)
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -194,21 +203,29 @@ async def participant_ide_page():
 
 @app.on_event("startup")
 async def startup():
-    await connect_db()
+    try:
+        logger.info("Starting up...")
+        await connect_db()
+        logger.info("Database connected")
 
-    os.makedirs(os.path.abspath(CHALLENGE_STORAGE_PATH), exist_ok=True)
-    os.makedirs(os.path.abspath(TEAM_WORKSPACE_PATH), exist_ok=True)
-    os.makedirs(os.path.abspath(EVALUATOR_PATH), exist_ok=True)
+        os.makedirs(os.path.abspath(CHALLENGE_STORAGE_PATH), exist_ok=True)
+        os.makedirs(os.path.abspath(TEAM_WORKSPACE_PATH), exist_ok=True)
+        os.makedirs(os.path.abspath(EVALUATOR_PATH), exist_ok=True)
 
-    db = get_db()
-    from app.config import ADMIN_USERNAME, ADMIN_PASSWORD
-    existing_admin = await db.admins.find_one({"username": ADMIN_USERNAME})
-    if not existing_admin:
-        await db.admins.insert_one({
-            "username": ADMIN_USERNAME,
-            "password_hash": hash_password(ADMIN_PASSWORD),
-            "created_at": __import__("datetime").datetime.utcnow()
-        })
+        db = get_db()
+        from app.config import ADMIN_USERNAME, ADMIN_PASSWORD
+        existing_admin = await db.admins.find_one({"username": ADMIN_USERNAME})
+        if not existing_admin:
+            await db.admins.insert_one({
+                "username": ADMIN_USERNAME,
+                "password_hash": hash_password(ADMIN_PASSWORD),
+                "created_at": __import__("datetime").datetime.utcnow()
+            })
+            logger.info("Default admin created")
+        logger.info("Startup complete!")
+    except Exception as e:
+        logger.error("Startup failed: %s", e, exc_info=True)
+        raise
 
 
 @app.on_event("shutdown")

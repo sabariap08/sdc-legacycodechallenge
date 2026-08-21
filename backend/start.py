@@ -1,5 +1,9 @@
 import uvicorn
 import os
+import ssl
+import certifi
+
+os.environ["SSL_CERT_FILE"] = certifi.where()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
