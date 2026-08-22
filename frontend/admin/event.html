@@ -17,6 +17,10 @@
         .countdown-block { text-align:center; }
         .countdown-block .countdown-num { font-size:32px; font-weight:700; color:var(--primary); font-family:var(--font-mono); min-width:64px; display:block; }
         .countdown-block .countdown-label { font-size:11px; color:var(--text-muted); text-transform:uppercase; }
+        .info-card { background:var(--bg-card); border:1px solid var(--border); border-radius:var(--radius-md); padding:16px 20px; }
+        .info-card .info-label { font-size:11px; font-weight:600; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px; }
+        .info-card .info-value { font-size:15px; font-weight:600; color:var(--text-primary); }
+        .info-card .info-value.muted { color:var(--text-muted); font-size:13px; }
         .toggle-group { display:flex; gap:4px; background:var(--bg-input); border-radius:var(--radius); padding:4px; }
         .toggle-btn { flex:1; padding:8px 16px; border:none; background:transparent; border-radius:var(--radius-sm); font-size:13px; font-weight:600; color:var(--text-muted); cursor:pointer; transition:var(--transition); font-family:var(--font-sans); }
         .toggle-btn.active { background:var(--bg-card); color:var(--text-primary); box-shadow:var(--shadow-sm); }
@@ -40,6 +44,12 @@
                 <div class="status-value draft" id="statusValue">Loading...</div>
                 <div id="countdownDisplay"></div>
             </div>
+            <div id="infoCards" class="grid-2 mb-3" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr));">
+                <div class="info-card"><div class="info-label">Start Time</div><div class="info-value muted" id="infoStart">Not set</div></div>
+                <div class="info-card"><div class="info-label">End Time</div><div class="info-value muted" id="infoEnd">Not set</div></div>
+                <div class="info-card"><div class="info-label">Duration Limit</div><div class="info-value" id="infoDuration">-</div></div>
+                <div class="info-card"><div class="info-label">Multi-Submission</div><div class="info-value" id="infoMulti">-</div></div>
+            </div>
             <div class="grid-2 mb-3">
                 <div class="card">
                     <div class="card-header"><h3>Event Timing</h3></div>
@@ -55,7 +65,7 @@
                             </div>
                             <input type="hidden" id="multiSubmissions" value="false">
                         </div>
-                        <button type="submit" class="btn btn-primary" style="width:100%;">${ICONS.save} Save Configuration</button>
+                        <button type="submit" class="btn btn-primary" style="width:100%;" id="saveBtn">${ICONS.save} Save Configuration</button>
                     </form>
                 </div>
                 <div class="card">
@@ -64,30 +74,15 @@
                         <div style="padding:16px; background:var(--bg-input); border:1px solid var(--border); border-radius:var(--radius);">
                             <p style="font-size:13px; font-weight:600; margin-bottom:4px;">Restart Event</p>
                             <p style="font-size:12px; color:var(--text-muted); margin-bottom:12px;">Reset the event lifecycle. Allocations, submissions, and workspaces will be cleared. Teams and repositories are preserved.</p>
-                            <button class="btn btn-danger btn-sm" onclick="showRestartModal()">${ICONS.alertCircle} Restart Event</button>
+                            <button class="btn btn-danger btn-sm" onclick="showRestartModal()">${ICONS.refresh} Restart Event</button>
                         </div>
                         <div style="padding:16px; background:var(--bg-input); border:1px solid var(--border); border-radius:var(--radius);">
-                            <p style="font-size:13px; font-weight:600; margin-bottom:4px;">Blocked Users</p>
-                            <p style="font-size:12px; color:var(--text-muted); margin-bottom:12px;">Manage email blocks for participants.</p>
-                            <button class="btn btn-secondary btn-sm" onclick="showBlockModal()">${ICONS.ban} Manage Blocked Users</button>
+                            <p style="font-size:13px; font-weight:600; margin-bottom:4px;">User Management</p>
+                            <p style="font-size:12px; color:var(--text-muted); margin-bottom:12px;">Block or unblock teams and participants.</p>
+                            <a href="/admin/users" class="btn btn-secondary btn-sm">${ICONS.users} Manage Users</a>
                         </div>
                     </div>
                 </div>
-            </div>
-            <div id="blockModal" class="modal-overlay">
-                <div class="modal" style="max-width:440px;">
-                    <div class="modal-header"><h3>Block Email</h3><button class="modal-close" onclick="closeBlockModal()">&times;</button></div>
-                    <div class="form-group"><label>Email Address</label><input type="email" id="blockEmail" placeholder="user@example.com"></div>
-                    <div class="form-group"><label>Reason (optional)</label><input type="text" id="blockReason" placeholder="e.g. Cheating attempt"></div>
-                    <div class="modal-footer">
-                        <button class="btn btn-secondary" onclick="closeBlockModal()">Cancel</button>
-                        <button class="btn btn-danger" onclick="blockUser()">Block</button>
-                    </div>
-                </div>
-            </div>
-            <div id="blockedUsersSection" class="card mt-2" style="display:none;">
-                <div class="card-header"><h3>Blocked Users</h3></div>
-                <div id="blockedUsersList"><div class="flex-center" style="padding:16px;"><span class="loading-spinner"></span></div></div>
             </div>
             <div id="restartModal" class="modal-overlay">
                 <div class="modal" style="max-width:440px;">
@@ -110,8 +105,6 @@
             btn.classList.add('active');
             btn.classList.add(val ? 'yes-active' : 'no-active');
         }
-        function showBlockModal() { document.getElementById('blockModal').classList.add('active'); document.getElementById('blockedUsersSection').style.display = ''; loadBlockedUsers(); }
-        function closeBlockModal() { document.getElementById('blockModal').classList.remove('active'); }
         function showRestartModal() { document.getElementById('restartModal').classList.add('active'); }
         function closeRestartModal() { document.getElementById('restartModal').classList.remove('active'); }
         async function confirmRestart() {
@@ -124,33 +117,6 @@
                 else { showError('error-msg', data.detail || 'Failed'); }
             } catch (err) { showError('error-msg', err.message); }
             btn.disabled = false; btn.innerHTML = 'Confirm Restart';
-        }
-        async function blockUser() {
-            const email = document.getElementById('blockEmail').value.trim();
-            const reason = document.getElementById('blockReason').value.trim();
-            if (!email) return;
-            const resp = await API.post('/api/admin/blocked-users', { email, reason });
-            if (resp && resp.ok) { closeBlockModal(); document.getElementById('blockEmail').value = ''; document.getElementById('blockReason').value = ''; loadBlockedUsers(); }
-            else { const data = resp ? await resp.json() : {}; alert(data.detail || 'Failed'); }
-        }
-        async function unblockUser(email) {
-            if (!confirm('Unblock ' + email + '?')) return;
-            await API.del('/api/admin/blocked-users/' + encodeURIComponent(email));
-            loadBlockedUsers();
-        }
-        async function loadBlockedUsers() {
-            const resp = await API.get('/api/admin/blocked-users');
-            if (!resp) return;
-            const data = await resp.json();
-            if (data.blocked_users.length === 0) {
-                document.getElementById('blockedUsersList').innerHTML = '<p class="text-muted text-sm" style="padding:12px;">No blocked users</p>';
-                return;
-            }
-            let html = '';
-            for (const u of data.blocked_users) {
-                html += '<div class="blocked-user"><div class="user-info"><div class="avatar" style="font-size:11px; font-weight:700;">BLOCK</div><div><div style="font-size:13px; font-weight:600;">' + escapeHtml(u.email) + '</div><div style="font-size:11px; color:var(--text-muted);">' + (u.reason ? escapeHtml(u.reason) + ' | ' : '') + formatDate(u.blocked_at) + '</div></div></div><button class="btn btn-sm btn-secondary" onclick="unblockUser(\'' + escapeHtml(u.email) + '\')">Unblock</button></div>';
-            }
-            document.getElementById('blockedUsersList').innerHTML = html;
         }
         async function loadStatus() {
             const resp = await API.get('/api/admin/event/status');
@@ -173,6 +139,11 @@
                 btns.forEach(b => { b.classList.remove('active', 'yes-active', 'no-active'); });
                 if (multi) { btns[0].classList.add('active', 'yes-active'); }
                 else { btns[1].classList.add('active', 'no-active'); }
+
+                document.getElementById('infoStart').textContent = data.settings.event_start_time ? formatDate(data.settings.event_start_time) : 'Not set';
+                document.getElementById('infoEnd').textContent = data.settings.event_end_time ? formatDate(data.settings.event_end_time) : 'Not set';
+                document.getElementById('infoDuration').textContent = (data.settings.event_duration_minutes || 300) + ' minutes';
+                document.getElementById('infoMulti').textContent = multi ? 'Enabled' : 'Disabled';
             }
             countdownEl.innerHTML = '';
             if (computed === 'UPCOMING' && data.countdown_seconds !== null && data.countdown_seconds !== undefined) {

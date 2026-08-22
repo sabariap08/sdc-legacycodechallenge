@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>User Management - Legacy Code Rescue</title>
+    <link rel="stylesheet" href="/static/css/styles.css">
+</head>
+<body>
+    <script src="/static/js/api.js"></script>
+    <script>
+        if (!API.isLoggedIn() || API.role !== 'admin') { window.location.href = '/login'; }
+        function logout() { API.clearAuth(); window.location.href = '/login'; }
+        document.body.innerHTML = renderAdminLayout('users', 'User Management');
+        initTheme();
+        document.getElementById('pageContent').innerHTML = `
+            <div class="page-header">
+                <h1>User Management</h1>
+                <p>Block or unblock teams and participants</p>
+            </div>
+            <div class="tabs mb-2" id="userTabs">
+                <button class="tab active" onclick="switchTab('teams')">Teams</button>
+                <button class="tab" onclick="switchTab('participants')">Participants</button>
+                <button class="tab" onclick="switchTab('blocked')">Blocked Users</button>
+            </div>
+            <div id="error-msg" class="error-message"></div>
+            <div id="success-msg" class="success-message"></div>
+            <div id="confirmModal" class="modal-overlay" style="display:none;" onclick="closeConfirm()">
+                <div class="modal" onclick="event.stopPropagation()">
+                    <div class="modal-header"><h3 id="confirmTitle">Confirm</h3><button class="modal-close" onclick="closeConfirm()">&times;</button></div>
+                    <div class="modal-body"><p id="confirmBody">Are you sure?</p></div>
+                    <div class="modal-footer">
+                        <button class="btn btn-secondary" onclick="closeConfirm()">Cancel</button>
+                        <button class="btn btn-danger" id="confirmBtn">Confirm</button>
+                    </div>
+                </div>
+            </div>
+            <div id="tabContent"><div class="flex-center" style="padding:24px;"><span class="loading-spinner"></span></div></div>
+        `;
+
+        function showConfirm(title, body, onConfirm) {
+            document.getElementById('confirmTitle').textContent = title;
+            document.getElementById('confirmBody').textContent = body;
+            document.getElementById('confirmBtn').onclick = () => { closeConfirm(); onConfirm(); };
+            document.getElementById('confirmModal').style.display = 'flex';
+        }
+        function closeConfirm() { document.getElementById('confirmModal').style.display = 'none'; }
+
+        let currentTab = 'teams';
+        let cachedData = null;
+
+        function switchTab(tab) {
+            currentTab = tab;
+            document.querySelectorAll('#userTabs .tab').forEach(t => t.classList.remove('active'));
+            event.target.classList.add('active');
+            if (cachedData) renderTab(cachedData);
+            else loadData();
+        }
+
+        async function loadData() {
+            const resp = await API.get('/api/admin/user-management');
+            if (!resp) return;
+            cachedData = await resp.json();
+            renderTab(cachedData);
+        }
+
+        function renderTab(data) {
+            const el = document.getElementById('tabContent');
+            if (currentTab === 'teams') {
+                if (data.teams.length === 0) {
+                    el.innerHTML = '<div class="empty-state"><div class="empty-icon">' + ICONS.teams + '</div><h3>No teams</h3></div>';
+                    return;
+                }
+                let html = '<div class="table-container"><table><thead><tr><th>Team Code</th><th>Team Name</th><th>Members</th><th>Status</th><th>Blocked</th><th>Actions</th></tr></thead><tbody>';
+                for (const t of data.teams) {
+                    const blocked = t.status === 'BLOCKED' || t.is_blocked;
+                    html += '<tr style="' + (blocked ? 'opacity:.6;' : '') + '">';
+                    html += '<td><strong class="font-mono">' + escapeHtml(t.team_code) + '</strong></td>';
+                    html += '<td>' + escapeHtml(t.team_name) + '</td>';
+                    html += '<td>' + t.participant_count + '</td>';
+                    html += '<td>' + getStatusBadge(t.status) + '</td>';
+                    html += '<td>' + (blocked ? '<span class="badge badge-danger">' + (t.blocked_count || 0) + ' blocked</span>' : '<span class="badge badge-success">None</span>') + '</td>';
+                    html += '<td><div class="flex gap-1">';
+                    if (blocked) {
+                        html += '<button class="btn btn-sm btn-success" onclick="unblockTeamAction(\'' + t.team_code + '\')">' + ICONS.unlock + ' Unblock</button>';
+                    } else {
+                        html += '<button class="btn btn-sm btn-danger" onclick="blockTeamAction(\'' + t.team_code + '\',\'' + escapeHtml(t.team_name) + '\')">' + ICONS.shieldOff + ' Block</button>';
+                    }
+                    html += '</div></td></tr>';
+                }
+                html += '</tbody></table></div>';
+                el.innerHTML = html;
+            } else if (currentTab === 'participants') {
+                if (data.participants.length === 0) {
+                    el.innerHTML = '<div class="empty-state"><div class="empty-icon">' + ICONS.users + '</div><h3>No participants</h3></div>';
+                    return;
+                }
+                let html = '<div class="table-container"><table><thead><tr><th>Name</th><th>Email</th><th>Team</th><th>Status</th><th>Actions</th></tr></thead><tbody>';
+                for (const p of data.participants) {
+                    html += '<tr style="' + (p.is_blocked ? 'opacity:.6;' : '') + '">';
+                    html += '<td><strong>' + (p.is_team_leader ? '[L] ' : '') + escapeHtml(p.name) + '</strong></td>';
+                    html += '<td>' + escapeHtml(p.email) + '</td>';
+                    html += '<td><span class="font-mono">' + escapeHtml(p.team_code || '') + '</span></td>';
+                    html += '<td>' + (p.is_blocked ? '<span class="badge badge-danger">BLOCKED</span>' : '<span class="badge badge-success">Active</span>') + '</td>';
+                    html += '<td>';
+                    if (p.is_blocked) {
+                        html += '<button class="btn btn-sm btn-success" onclick="unblockParticipantAction(\'' + escapeHtml(p.email) + '\')">' + ICONS.unlock + ' Unblock</button>';
+                    } else {
+                        html += '<button class="btn btn-sm btn-danger" onclick="blockParticipantAction(\'' + escapeHtml(p.email) + '\')">' + ICONS.shieldOff + ' Block</button>';
+                    }
+                    html += '</td></tr>';
+                }
+                html += '</tbody></table></div>';
+                el.innerHTML = html;
+            } else if (currentTab === 'blocked') {
+                if (data.blocked_users.length === 0) {
+                    el.innerHTML = '<div class="empty-state"><div class="empty-icon">' + ICONS.checkCircle + '</div><h3>No blocked users</h3><p>All users are currently active</p></div>';
+                    return;
+                }
+                let html = '<div class="table-container"><table><thead><tr><th>Email</th><th>Team</th><th>Reason</th><th>Blocked At</th><th>Action</th></tr></thead><tbody>';
+                for (const b of data.blocked_users) {
+                    html += '<tr>';
+                    html += '<td><strong>' + escapeHtml(b.email) + '</strong></td>';
+                    html += '<td><span class="font-mono">' + escapeHtml(b.team_code || '') + '</span></td>';
+                    html += '<td>' + escapeHtml(b.reason || '-') + '</td>';
+                    html += '<td>' + formatDate(b.blocked_at) + '</td>';
+                    html += '<td><button class="btn btn-sm btn-success" onclick="unblockParticipantAction(\'' + escapeHtml(b.email) + '\')">' + ICONS.unlock + ' Unblock</button></td>';
+                    html += '</tr>';
+                }
+                html += '</tbody></table></div>';
+                el.innerHTML = html;
+            }
+        }
+
+        async function blockTeamAction(code, name) {
+            showConfirm('Block Team', 'Block team "' + name + '"? All members will be prevented from logging in.', async () => {
+                const resp = await API.post('/api/admin/block/team/' + code, {});
+                if (resp && resp.ok) { cachedData = null; loadData(); }
+                else { const d = resp ? await resp.json() : {}; showError('error-msg', d.detail || 'Failed'); }
+            });
+        }
+
+        async function unblockTeamAction(code) {
+            showConfirm('Unblock Team', 'Unblock team "' + code + '"? Members will be able to log in again.', async () => {
+                const resp = await API.post('/api/admin/unblock/team/' + code, {});
+                if (resp && resp.ok) { cachedData = null; loadData(); }
+                else { const d = resp ? await resp.json() : {}; showError('error-msg', d.detail || 'Failed'); }
+            });
+        }
+
+        async function blockParticipantAction(email) {
+            showConfirm('Block Participant', 'Block "' + email + '"? They will not be able to log in.', async () => {
+                const resp = await API.post('/api/admin/block/participant/' + encodeURIComponent(email), {});
+                if (resp && resp.ok) { cachedData = null; loadData(); }
+                else { const d = resp ? await resp.json() : {}; showError('error-msg', d.detail || 'Failed'); }
+            });
+        }
+
+        async function unblockParticipantAction(email) {
+            showConfirm('Unblock Participant', 'Unblock "' + email + '"?', async () => {
+                const resp = await API.post('/api/admin/unblock/participant/' + encodeURIComponent(email), {});
+                if (resp && resp.ok) { cachedData = null; loadData(); }
+                else { const d = resp ? await resp.json() : {}; showError('error-msg', d.detail || 'Failed'); }
+            });
+        }
+
+        loadData();
+    </script>
+</body>
+</html>

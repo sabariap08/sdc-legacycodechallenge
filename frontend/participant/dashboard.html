@@ -290,9 +290,10 @@
                         <div id="teamInfo"><div class="flex-center" style="padding:16px;"><span class="loading-spinner"></span></div></div>
                     </div>
                     <div class="card">
-                        <div class="card-header"><h3>Assigned Bin</h3></div>
-                        <div style="text-align:center; padding:24px;">
-                            <div style="font-size:28px; font-weight:700; color:var(--secondary); font-family:var(--font-mono);" id="binNumber">-</div>
+                        <div class="card-header"><h3>Team Details</h3></div>
+                        <div id="teamDetails" style="padding:8px;">
+                            <div style="margin-bottom:12px;"><span class="text-muted" style="font-size:12px;">Team Code</span><div class="font-mono font-semibold" id="teamCodeDetail">-</div></div>
+                            <div style="margin-bottom:12px;"><span class="text-muted" style="font-size:12px;">Members</span><div class="font-semibold" id="memberCountDetail">-</div></div>
                         </div>
                     </div>
                 </div>
@@ -313,7 +314,8 @@
             document.getElementById('teamName').textContent = data.team_name || 'Unknown Team';
             document.getElementById('teamCodeDisplay').textContent = data.team_code;
             document.getElementById('eventStatusBadge').innerHTML = getStatusBadge(data.event_status);
-            document.getElementById('binNumber').textContent = data.bin_number;
+            document.getElementById('teamCodeDetail').textContent = data.team_code;
+            document.getElementById('memberCountDetail').textContent = (data.participants || []).length;
 
             const memberCount = (data.participants || []).length;
             const hasAlloc = data.allocation && data.allocation.released && data.allocation.challenge_code;

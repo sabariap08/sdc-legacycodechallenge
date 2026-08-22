@@ -4,6 +4,7 @@ from app.database import get_db
 from app.security import get_admin_user
 from datetime import datetime
 import secrets
+import random
 
 router = APIRouter(prefix="/api/admin", tags=["allocation"])
 
@@ -67,19 +68,30 @@ async def generate_allocation(admin=Depends(get_admin_user)):
 
     await db.allocations.delete_many({})
 
-    team_codes = [t["team_code"] for t in teams]
-    secrets.SystemRandom().shuffle(team_codes)
+    team_list = list(teams)
+    random.shuffle(team_list)
 
     challenge_codes = [ch["challenge_code"] for ch in challenges]
+    num_challenges = len(challenge_codes)
+    num_teams = len(team_list)
+
+    pool = challenge_codes * (num_teams // num_challenges + 1)
+    random.shuffle(pool)
+
+    target_counts = {}
+    for cc in challenge_codes:
+        target_counts[cc] = 0
+    for cc in pool[:num_teams]:
+        target_counts[cc] += 1
 
     allocations = []
-    for i, tc in enumerate(team_codes):
-        cc = challenge_codes[i % len(challenge_codes)]
-        team = next(t for t in teams if t["team_code"] == tc)
+    pool_idx = 0
+    for team in team_list:
+        cc = pool[pool_idx]
+        pool_idx += 1
         alloc_doc = {
-            "team_code": tc,
+            "team_code": team["team_code"],
             "challenge_code": cc,
-            "bin_number": team.get("bin_number", ""),
             "released": False,
             "state": "GENERATED",
             "allocated_at": datetime.utcnow()

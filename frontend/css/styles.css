@@ -1000,6 +1000,9 @@ table td strong {
     margin-bottom: 16px;
     border: 1px solid;
 }
+
+.info-message.show {
+    display: block;
 }
 
 /* --- EMPTY STATE --- */

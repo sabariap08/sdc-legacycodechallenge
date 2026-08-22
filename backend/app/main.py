@@ -181,6 +181,11 @@ async def admin_audit_page():
     return FileResponse(os.path.join(frontend_path, "admin", "audit.html"))
 
 
+@app.get("/admin/users")
+async def admin_users_page():
+    return FileResponse(os.path.join(frontend_path, "admin", "users.html"))
+
+
 @app.get("/admin/submissions")
 async def admin_submissions_page():
     return FileResponse(os.path.join(frontend_path, "admin", "submissions.html"))

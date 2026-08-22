@@ -5,6 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Teams - Legacy Code Rescue</title>
     <link rel="stylesheet" href="/static/css/styles.css">
+    <style>
+        .alloc-step{display:flex;align-items:center;gap:6px;padding:8px 14px;border-radius:var(--radius);font-size:13px;font-weight:500;background:var(--bg-input);border:1px solid var(--border);color:var(--text-muted)}
+        .alloc-step.active{border-color:var(--primary);color:var(--primary);background:var(--primary-bg)}
+        .alloc-step.done{border-color:var(--success);color:var(--success);background:var(--success-bg)}
+        .alloc-arrow{color:var(--text-muted);font-size:14px}
+        .alloc-step .step-dot{width:8px;height:8px;border-radius:50%;background:currentColor}
+        .alloc-state{display:flex;align-items:center;gap:8px;margin-bottom:20px}
+    </style>
 </head>
 <body>
     <script src="/static/js/api.js"></script>
@@ -19,78 +27,176 @@
                     <h1>Teams</h1>
                     <p>All registered teams and participants</p>
                 </div>
-                <a href="/admin/new-team" class="btn btn-primary">${ICONS.add} New Team</a>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                    <button class="btn btn-primary" onclick="showCreateWizard()">${ICONS.add} New Team</button>
+                    <button class="btn btn-secondary" onclick="showRandomAlloc()" id="allocBtn">${ICONS.randomize} Random Allocation</button>
+                </div>
             </div>
+            <div id="allocStateWrap"></div>
+            <div id="allocNotice" class="info-message mb-2" style="display:none;"></div>
             <div class="card">
+                <div id="error-msg" class="error-message"></div>
+                <div id="success-msg" class="success-message"></div>
                 <div id="teamsContent"><div class="flex-center" style="padding:24px;"><span class="loading-spinner"></span></div></div>
             </div>
             <div id="teamDetail" style="display:none;"></div>
+            <div id="wizardWrap" style="display:none;"></div>
+            <div id="allocModal" class="modal-overlay" style="display:none;" onclick="closeAllocModal()">
+                <div class="modal" onclick="event.stopPropagation()">
+                    <div class="modal-header"><h3 id="allocModalTitle">Confirm</h3><button class="modal-close" onclick="closeAllocModal()">&times;</button></div>
+                    <div class="modal-body"><p id="allocModalBody">Are you sure?</p></div>
+                    <div class="modal-footer">
+                        <button class="btn btn-secondary" onclick="closeAllocModal()">Cancel</button>
+                        <button class="btn btn-danger" id="allocModalConfirm">Confirm</button>
+                    </div>
+                </div>
+            </div>
         `;
-        let currentView = 'list';
-        async function loadTeams() {
-            currentView = 'list';
-            document.getElementById('teamDetail').style.display = 'none';
-            document.querySelector('.page-content > .card').style.display = '';
-            const resp = await API.get('/api/admin/teams');
+
+        function showAllocModal(title, body, onConfirm) {
+            document.getElementById('allocModalTitle').textContent = title;
+            document.getElementById('allocModalBody').textContent = body;
+            document.getElementById('allocModalConfirm').onclick = () => { closeAllocModal(); onConfirm(); };
+            document.getElementById('allocModal').style.display = 'flex';
+        }
+        function closeAllocModal() { document.getElementById('allocModal').style.display = 'none'; }
+
+        async function showRandomAlloc() {
+            const resp = await API.get('/api/admin/allocation');
             if (!resp) return;
             const data = await resp.json();
-            if (data.teams.length === 0) {
+            const state = data.allocation_state || 'PENDING';
+            if (state === 'RELEASED' || state === 'COMPLETED') {
+                showError('error-msg', 'Allocations already released. Cannot regenerate.');
+                return;
+            }
+            showAllocModal('Random Allocation', 'This will randomly assign challenges to all teams. Existing allocations will be replaced. Continue?', async () => {
+                try {
+                    const r = await API.post('/api/admin/allocation/generate', {});
+                    const d = await r.json();
+                    if (r.ok) {
+                        showSuccess('success-msg', 'Allocation generated for ' + d.allocations.length + ' teams. Click release to make it visible to participants.');
+                        loadTeams();
+                    } else { showError('error-msg', d.detail || 'Failed'); }
+                } catch(e) { showError('error-msg', 'Connection error'); }
+            });
+        }
+
+        async function loadTeams() {
+            document.getElementById('teamDetail').style.display = 'none';
+            document.getElementById('wizardWrap').style.display = 'none';
+            const card = document.querySelector('.page-content > .card');
+            if (card) card.style.display = '';
+
+            try {
+                const statusResp = await API.get('/api/admin/event/status');
+                if (statusResp) {
+                    const sd = await statusResp.json();
+                    const cs = sd.computed_status;
+                    if (cs === 'ONGOING' || cs === 'COMPLETED') {
+                        document.getElementById('allocBtn').disabled = true;
+                    } else {
+                        document.getElementById('allocBtn').disabled = false;
+                    }
+                }
+            } catch(e) {}
+
+            const resp = await API.get('/api/admin/allocation');
+            if (resp) {
+                const aData = await resp.json();
+                const state = aData.allocation_state || 'PENDING';
+                const steps = ['PENDING','GENERATED','RELEASED'];
+                const labels = {PENDING:'Pending',GENERATED:'Generated',RELEASED:'Released'};
+                let html = '<div class="alloc-state">';
+                const idx = steps.indexOf(state);
+                for (let i = 0; i < steps.length; i++) {
+                    const cls = i < idx ? 'done' : i === idx ? 'active' : '';
+                    html += '<div class="alloc-step ' + cls + '"><span class="step-dot"></span>' + labels[steps[i]] + '</div>';
+                    if (i < steps.length - 1) html += '<span class="alloc-arrow">&#8594;</span>';
+                }
+                html += '</div>';
+                document.getElementById('allocStateWrap').innerHTML = html;
+            }
+
+            const teamsResp = await API.get('/api/admin/teams');
+            if (!teamsResp) return;
+            const tData = await teamsResp.json();
+            if (tData.teams.length === 0) {
                 document.getElementById('teamsContent').innerHTML = '<div class="empty-state"><div class="empty-icon">' + ICONS.teams + '</div><h3>No teams registered</h3><p>Create your first team to get started</p></div>';
                 return;
             }
-            let html = '<div class="table-container"><table><thead><tr><th>Team Code</th><th>Team Name</th><th>Bin</th><th>Members</th><th>Status</th><th>Actions</th></tr></thead><tbody>';
-            for (const t of data.teams) {
-                html += `<tr>
-                    <td><strong class="font-mono">${escapeHtml(t.team_code)}</strong></td>
-                    <td>${escapeHtml(t.team_name)}</td>
-                    <td><span class="badge badge-neutral">${escapeHtml(t.bin_number)}</span></td>
-                    <td>${t.participant_count}</td>
-                    <td>${getStatusBadge(t.status)}</td>
-                    <td>
-                        <div class="flex gap-1">
-                            <button class="btn btn-sm btn-secondary" onclick="viewTeam('${t.team_code}')">View</button>
-                            <button class="btn btn-sm btn-danger" onclick="deleteTeam('${t.team_code}', '${escapeHtml(t.team_name)}')">Delete</button>
-                        </div>
-                    </td>
-                </tr>`;
+
+            let allocMap = {};
+            const aResp = await API.get('/api/admin/allocation');
+            if (aResp) {
+                const ad = await aResp.json();
+                for (const a of ad.allocations) { allocMap[a.team_code] = a.challenge_code; }
+            }
+
+            let html = '<div class="table-container"><table><thead><tr><th>Team Code</th><th>Team Name</th><th>Members</th><th>Challenge</th><th>Status</th><th>Actions</th></tr></thead><tbody>';
+            for (const t of tData.teams) {
+                const chall = allocMap[t.team_code] || '<span class="text-muted">-</span>';
+                const blocked = t.status === 'BLOCKED';
+                html += '<tr style="' + (blocked ? 'opacity:.6;' : '') + '">';
+                html += '<td><strong class="font-mono">' + escapeHtml(t.team_code) + '</strong></td>';
+                html += '<td>' + escapeHtml(t.team_name) + (blocked ? ' <span class="badge badge-danger">BLOCKED</span>' : '') + '</td>';
+                html += '<td>' + t.participant_count + '</td>';
+                html += '<td>' + (typeof chall === 'string' ? '<span class="badge badge-info">' + escapeHtml(chall) + '</span>' : chall) + '</td>';
+                html += '<td>' + getStatusBadge(t.status) + '</td>';
+                html += '<td><div class="flex gap-1">';
+                html += '<button class="btn btn-sm btn-secondary" onclick="viewTeam(\'' + t.team_code + '\')">View</button>';
+                if (blocked) {
+                    html += '<button class="btn btn-sm btn-success" onclick="unblockTeam(\'' + t.team_code + '\')">' + ICONS.unlock + ' Unblock</button>';
+                } else {
+                    html += '<button class="btn btn-sm btn-danger" onclick="blockTeam(\'' + t.team_code + '\',\'' + escapeHtml(t.team_name) + '\')">' + ICONS.shieldOff + ' Block</button>';
+                }
+                html += '<button class="btn btn-sm btn-danger" onclick="deleteTeam(\'' + t.team_code + '\',\'' + escapeHtml(t.team_name) + '\')">Delete</button>';
+                html += '</div></td></tr>';
             }
             html += '</tbody></table></div>';
             document.getElementById('teamsContent').innerHTML = html;
         }
+
         async function viewTeam(code) {
-            const resp = await API.get(`/api/admin/teams/${code}`);
+            const resp = await API.get('/api/admin/teams/' + code);
             if (!resp) return;
             const data = await resp.json();
             const t = data.team;
             let participantsHtml = '';
             for (const p of data.participants) {
-                participantsHtml += `<div style="padding:12px; background:var(--bg-input); border:1px solid var(--border); border-radius:var(--radius); margin-bottom:8px;">
-                    <div class="flex-between" style="flex-wrap:wrap; gap:4px;">
-                        <div>
-                            <strong>${p.is_team_leader ? '[LEADER] ' : ''}${escapeHtml(p.name)}</strong>
-                            ${p.is_team_leader ? ' <span class="badge badge-info">LEADER</span>' : ''}
-                        </div>
-                    </div>
-                    <div style="margin-top:6px; font-size:12px; color:var(--text-muted); word-break:break-word;">
-                        ${escapeHtml(p.email)} ${p.roll_number ? '| Roll: ' + escapeHtml(p.roll_number) : ''} ${p.college ? '| ' + escapeHtml(p.college) : ''} ${p.phone ? '| ' + escapeHtml(p.phone) : ''}
-                    </div>
-                </div>`;
+                participantsHtml += '<div style="padding:12px;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:8px;">';
+                participantsHtml += '<div class="flex-between" style="flex-wrap:wrap;gap:4px;"><div>';
+                participantsHtml += '<strong>' + (p.is_team_leader ? '[LEADER] ' : '') + escapeHtml(p.name) + '</strong>';
+                if (p.is_team_leader) participantsHtml += ' <span class="badge badge-info">LEADER</span>';
+                participantsHtml += '</div></div>';
+                participantsHtml += '<div style="margin-top:6px;font-size:12px;color:var(--text-muted);word-break:break-word;">' + escapeHtml(p.email) + (p.roll_number ? ' | Roll: ' + escapeHtml(p.roll_number) : '') + (p.college ? ' | ' + escapeHtml(p.college) : '') + '</div>';
+                const blocked = await isBlocked(p.email);
+                participantsHtml += '<div style="margin-top:8px;">';
+                if (blocked) {
+                    participantsHtml += '<button class="btn btn-sm btn-success" onclick="unblockParticipant(\'' + escapeHtml(p.email) + '\')">' + ICONS.unlock + ' Unblock</button>';
+                } else {
+                    participantsHtml += '<button class="btn btn-sm btn-danger" onclick="blockParticipant(\'' + escapeHtml(p.email) + '\')">' + ICONS.shieldOff + ' Block</button>';
+                }
+                participantsHtml += '</div></div>';
             }
-            let submissionHtml = '<p class="text-muted" style="font-size:13px;">No submissions yet</p>';
-            if (data.submission) {
-                submissionHtml = `<div style="padding:12px; background:var(--bg-input); border:1px solid var(--border); border-radius:var(--radius);">
-                    <p><strong>Score:</strong> ${data.submission.score}/${data.submission.total}</p>
-                    <p><strong>Submitted:</strong> ${formatDate(data.submission.submitted_at)}</p>
-                    <p><strong>Status:</strong> ${getStatusBadge(data.submission.status)}</p>
-                </div>`;
-            }
+
             let allocHtml = '<p class="text-muted" style="font-size:13px;">Not allocated</p>';
             if (data.allocation) {
-                allocHtml = `<div style="padding:12px; background:var(--bg-input); border:1px solid var(--border); border-radius:var(--radius);">
-                    <p><strong>Challenge:</strong> ${escapeHtml(data.allocation.challenge_code)}</p>
-                    <p><strong>Released:</strong> ${data.allocation.released ? '<span class="badge badge-success">Yes</span>' : '<span class="badge badge-warning">No</span>'}</p>
-                </div>`;
+                allocHtml = '<div style="padding:12px;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius);">';
+                allocHtml += '<p><strong>Challenge:</strong> <span class="badge badge-info">' + escapeHtml(data.allocation.challenge_code) + '</span></p>';
+                allocHtml += '<p><strong>Released:</strong> ' + (data.allocation.released ? '<span class="badge badge-success">Yes</span>' : '<span class="badge badge-warning">No</span>') + '</p>';
+                allocHtml += '</div>';
             }
+
+            let submissionHtml = '<p class="text-muted" style="font-size:13px;">No submissions yet</p>';
+            if (data.submission) {
+                submissionHtml = '<div style="padding:12px;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius);">';
+                submissionHtml += '<p><strong>Score:</strong> ' + data.submission.score + '/' + data.submission.total + '</p>';
+                submissionHtml += '<p><strong>Submitted:</strong> ' + formatDate(data.submission.submitted_at) + '</p>';
+                submissionHtml += '<p><strong>Status:</strong> ' + getStatusBadge(data.submission.status) + '</p>';
+                submissionHtml += '</div>';
+            }
+
             document.querySelector('.page-content > .card').style.display = 'none';
             document.getElementById('teamDetail').style.display = 'block';
             document.getElementById('teamDetail').innerHTML = `
@@ -98,30 +204,210 @@
                     <div class="team-avatar">${escapeHtml(t.team_name.charAt(0).toUpperCase())}</div>
                     <div class="team-info">
                         <h2>${escapeHtml(t.team_name)}</h2>
-                        <p><span class="font-mono">${escapeHtml(t.team_code)}</span> &middot; ${escapeHtml(t.bin_number)} &middot; ${t.participant_count} members</p>
+                        <p><span class="font-mono">${escapeHtml(t.team_code)}</span> &middot; ${t.participant_count} members &middot; ${getStatusBadge(t.status)}</p>
                     </div>
-                    <div style="margin-left:auto;">
+                    <div style="margin-left:auto;display:flex;gap:8px;">
+                        ${t.status === 'BLOCKED' ? '<button class="btn btn-sm btn-success" onclick="unblockTeam(\'' + t.team_code + '\')">' + ICONS.unlock + ' Unblock Team</button>' : '<button class="btn btn-sm btn-danger" onclick="blockTeam(\'' + t.team_code + '\',\'' + escapeHtml(t.team_name) + '\')">' + ICONS.shieldOff + ' Block Team</button>'}
                         <button class="btn btn-secondary btn-sm" onclick="loadTeams()">Back to List</button>
                     </div>
                 </div>
                 <div class="grid-2 mb-3">
-                    <div class="card">
-                        <div class="card-header"><h3>Participants</h3></div>
-                        ${participantsHtml}
-                    </div>
+                    <div class="card"><div class="card-header"><h3>Participants</h3></div>${participantsHtml}</div>
                     <div>
                         <div class="card"><div class="card-header"><h3>Allocation</h3></div>${allocHtml}</div>
                         <div class="card"><div class="card-header"><h3>Submission</h3></div>${submissionHtml}</div>
                     </div>
-                </div>
-            `;
+                </div>`;
         }
+
+        async function isBlocked(email) {
+            const resp = await API.get('/api/admin/user-management');
+            if (!resp) return false;
+            const data = await resp.json();
+            return data.blocked_users.some(b => b.email === email);
+        }
+
+        async function blockTeam(code, name) {
+            showAllocModal('Block Team', 'Block team "' + name + '"? All members will be prevented from logging in.', async () => {
+                const resp = await API.post('/api/admin/block/team/' + code, {});
+                if (resp && resp.ok) { loadTeams(); }
+                else { const d = resp ? await resp.json() : {}; showError('error-msg', d.detail || 'Failed'); }
+            });
+        }
+
+        async function unblockTeam(code) {
+            showAllocModal('Unblock Team', 'Unblock team "' + code + '"? Members will be able to log in again.', async () => {
+                const resp = await API.post('/api/admin/unblock/team/' + code, {});
+                if (resp && resp.ok) { loadTeams(); }
+                else { const d = resp ? await resp.json() : {}; showError('error-msg', d.detail || 'Failed'); }
+            });
+        }
+
+        async function blockParticipant(email) {
+            showAllocModal('Block Participant', 'Block participant "' + email + '"? They will not be able to log in.', async () => {
+                const resp = await API.post('/api/admin/block/participant/' + encodeURIComponent(email), {});
+                if (resp && resp.ok) { loadTeams(); }
+                else { const d = resp ? await resp.json() : {}; showError('error-msg', d.detail || 'Failed'); }
+            });
+        }
+
+        async function unblockParticipant(email) {
+            showAllocModal('Unblock Participant', 'Unblock participant "' + email + '"?', async () => {
+                const resp = await API.post('/api/admin/unblock/participant/' + encodeURIComponent(email), {});
+                if (resp && resp.ok) { loadTeams(); }
+                else { const d = resp ? await resp.json() : {}; showError('error-msg', d.detail || 'Failed'); }
+            });
+        }
+
         async function deleteTeam(code, name) {
-            if (!confirm(`Delete team "${name}" (${code})?\n\nThis will remove all participants, allocations, and submissions.`)) return;
-            const resp = await API.del(`/api/admin/teams/${code}`);
+            if (!confirm('Delete team "' + name + '" (' + code + ')? This will remove all participants, allocations, and submissions.')) return;
+            const resp = await API.del('/api/admin/teams/' + code);
             if (resp && resp.ok) { loadTeams(); }
-            else { const data = resp ? await resp.json() : {}; alert(data.detail || 'Failed to delete team'); }
+            else { const d = resp ? await resp.json() : {}; showError('error-msg', d.detail || 'Failed to delete team'); }
         }
+
+        function showCreateWizard() {
+            document.querySelector('.page-content > .card').style.display = 'none';
+            document.getElementById('teamDetail').style.display = 'none';
+            document.getElementById('wizardWrap').style.display = 'block';
+            document.getElementById('wizardWrap').innerHTML = `
+                <div class="card" style="max-width:720px;">
+                    <div class="flex-between mb-2"><h3>Create New Team</h3><button class="btn btn-sm btn-ghost" onclick="loadTeams()">Cancel</button></div>
+                    <div id="wizError" class="error-message"></div>
+                    <div id="wizSuccess" class="success-message"></div>
+                    <div class="steps mb-2">
+                        <div class="step active" id="ws1"><span class="step-number">1</span>Team Info</div>
+                        <div class="step-divider"></div>
+                        <div class="step" id="ws2"><span class="step-number">2</span>Participants</div>
+                        <div class="step-divider"></div>
+                        <div class="step" id="ws3"><span class="step-number">3</span>Review</div>
+                    </div>
+                    <div id="wizStep1">
+                        <div class="form-group"><label>Team Name</label><input type="text" id="wTeamName" placeholder="Enter a unique team name"></div>
+                        <div class="form-group"><label>Number of Participants</label>
+                            <select id="wPartCount"><option value="">Select count</option><option value="1">1 Member</option><option value="2">2 Members</option><option value="3">3 Members</option><option value="4">4 Members</option></select>
+                        </div>
+                        <button class="btn btn-primary" onclick="wizGo2()" style="width:auto;">Next: Add Participants</button>
+                    </div>
+                    <div id="wizStep2" style="display:none;">
+                        <div id="wizParts"></div>
+                        <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap;">
+                            <button class="btn btn-secondary" onclick="wizGo1()" style="width:auto;">Back</button>
+                            <button class="btn btn-primary" onclick="wizGo3()" style="width:auto;">Next: Review</button>
+                        </div>
+                    </div>
+                    <div id="wizStep3" style="display:none;">
+                        <div id="wizReview"></div>
+                        <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap;">
+                            <button class="btn btn-secondary" onclick="wizGo2()" style="width:auto;">Back</button>
+                            <button class="btn btn-success" onclick="wizSubmit()" id="wizSubmitBtn" style="width:auto;">Create Team</button>
+                        </div>
+                    </div>
+                </div>`;
+        }
+
+        function wizGo1() {
+            document.getElementById('wizStep1').style.display = '';
+            document.getElementById('wizStep2').style.display = 'none';
+            document.getElementById('wizStep3').style.display = 'none';
+            document.getElementById('ws1').className = 'step active';
+            document.getElementById('ws2').className = 'step';
+            document.getElementById('ws3').className = 'step';
+        }
+
+        function wizGo2() {
+            hideError('wizError');
+            const name = document.getElementById('wTeamName').value.trim();
+            const count = parseInt(document.getElementById('wPartCount').value);
+            if (!name) { showError('wizError', 'Enter a team name'); return; }
+            if (isNaN(count) || count < 1) { showError('wizError', 'Select number of participants'); return; }
+            const c = document.getElementById('wizParts');
+            if (c.children.length === 0) {
+                for (let i = 0; i < count; i++) {
+                    const card = document.createElement('div');
+                    card.className = 'card';
+                    card.style.marginBottom = '12px';
+                    card.innerHTML = '<h4 style="margin-bottom:12px;font-size:14px;color:' + (i === 0 ? 'var(--primary)' : 'var(--text-secondary)') + '">' + (i === 0 ? '[LEADER] ' : '') + 'Participant ' + (i + 1) + '</h4>' +
+                        '<div class="grid-2">' +
+                        '<div class="form-group"><label>Full Name *</label><input type="text" name="wp' + i + '_name" placeholder="Enter full name"></div>' +
+                        '<div class="form-group"><label>Email *</label><input type="email" name="wp' + i + '_email" placeholder="email@example.com"></div>' +
+                        '<div class="form-group"><label>Roll Number</label><input type="text" name="wp' + i + '_roll" placeholder="e.g. 21CS001"></div>' +
+                        '<div class="form-group"><label>College</label><input type="text" name="wp' + i + '_college" placeholder="e.g. MIT"></div>' +
+                        '<div class="form-group"><label>Phone</label><input type="text" name="wp' + i + '_phone" placeholder="+91 XXXXX XXXXX"></div>' +
+                        '</div>';
+                    c.appendChild(card);
+                }
+            }
+            document.getElementById('wizStep1').style.display = 'none';
+            document.getElementById('wizStep2').style.display = '';
+            document.getElementById('ws1').className = 'step completed';
+            document.getElementById('ws2').className = 'step active';
+        }
+
+        function wizGo3() {
+            hideError('wizError');
+            const count = parseInt(document.getElementById('wPartCount').value);
+            for (let i = 0; i < count; i++) {
+                const nm = document.querySelector('[name="wp' + i + '_name"]').value.trim();
+                const em = document.querySelector('[name="wp' + i + '_email"]').value.trim();
+                if (!nm || !em) { showError('wizError', 'Fill name and email for Participant ' + (i + 1)); return; }
+            }
+            let html = '<div style="padding:12px;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:12px;"><p><strong>Team Name:</strong> ' + escapeHtml(document.getElementById('wTeamName').value.trim()) + '</p><p><strong>Members:</strong> ' + count + '</p></div>';
+            for (let i = 0; i < count; i++) {
+                const nm = document.querySelector('[name="wp' + i + '_name"]').value.trim();
+                const em = document.querySelector('[name="wp' + i + '_email"]').value.trim();
+                const rl = document.querySelector('[name="wp' + i + '_roll"]').value.trim();
+                html += '<div style="padding:10px;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:8px;font-size:13px;"><strong>' + (i === 0 ? '[LEADER] ' : '') + escapeHtml(nm) + '</strong> &mdash; ' + escapeHtml(em) + (rl ? ' | Roll: ' + escapeHtml(rl) : '') + '</div>';
+            }
+            html += '<p style="margin-top:12px;font-size:12px;color:var(--text-muted);">Default password: <strong>participants@123</strong></p>';
+            document.getElementById('wizReview').innerHTML = html;
+            document.getElementById('wizStep1').style.display = 'none';
+            document.getElementById('wizStep2').style.display = 'none';
+            document.getElementById('wizStep3').style.display = '';
+            document.getElementById('ws1').className = 'step completed';
+            document.getElementById('ws2').className = 'step completed';
+            document.getElementById('ws3').className = 'step active';
+        }
+
+        async function wizSubmit() {
+            hideError('wizError');
+            const btn = document.getElementById('wizSubmitBtn');
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading-spinner"></span> Creating...';
+            const count = parseInt(document.getElementById('wPartCount').value);
+            const participants = [];
+            for (let i = 0; i < count; i++) {
+                participants.push({
+                    name: document.querySelector('[name="wp' + i + '_name"]').value.trim(),
+                    email: document.querySelector('[name="wp' + i + '_email"]').value.trim(),
+                    roll_number: document.querySelector('[name="wp' + i + '_roll"]').value.trim(),
+                    college: document.querySelector('[name="wp' + i + '_college"]').value.trim(),
+                    phone: document.querySelector('[name="wp' + i + '_phone"]').value.trim(),
+                    is_team_leader: i === 0
+                });
+            }
+            try {
+                const resp = await API.post('/api/admin/teams', {
+                    team_name: document.getElementById('wTeamName').value.trim(),
+                    participant_count: count,
+                    participants: participants
+                });
+                const data = await resp.json();
+                if (resp.ok) {
+                    showSuccess('wizSuccess', '<h3 style="margin-bottom:12px;">Team Created Successfully</h3>' +
+                        '<div style="padding:12px;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:12px;">' +
+                        '<p><strong>Team Code:</strong> <span class="font-mono" style="font-size:16px;">' + escapeHtml(data.team_code) + '</span></p>' +
+                        '<p><strong>Team Name:</strong> ' + escapeHtml(data.team_name) + '</p>' +
+                        '<p><strong>Default Password:</strong> <code>' + data.default_password + '</code></p></div>' +
+                        '<p style="font-size:12px;color:var(--text-muted);">Share the team code with participants.</p>');
+                    document.getElementById('wizStep3').style.display = 'none';
+                    document.querySelector('.steps').style.display = 'none';
+                } else { showError('wizError', data.detail || 'Failed to create team'); }
+            } catch(e) { showError('wizError', 'Connection error'); }
+            btn.disabled = false;
+            btn.innerHTML = 'Create Team';
+        }
+
         loadTeams();
     </script>
 </body>

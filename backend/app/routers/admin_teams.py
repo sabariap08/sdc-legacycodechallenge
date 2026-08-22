@@ -126,6 +126,9 @@ async def list_teams(admin=Depends(get_admin_user)):
     teams = []
     async for team in db.teams.find().sort("created_at", -1):
         team["_id"] = str(team["_id"])
+        blocked_count = await db.blocked_users.count_documents({"team_code": team["team_code"]})
+        team["blocked_count"] = blocked_count
+        team["is_blocked"] = team.get("status") == "BLOCKED" or blocked_count > 0
         teams.append(team)
     return {"teams": teams}
 
@@ -188,3 +191,120 @@ async def list_participants(admin=Depends(get_admin_user)):
         p["_id"] = str(p["_id"])
         participants.append(p)
     return {"participants": participants}
+
+
+@router.post("/block/team/{team_code}")
+async def block_team(team_code: str, admin=Depends(get_admin_user)):
+    db = get_db()
+    team = await db.teams.find_one({"team_code": team_code})
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+    participants = []
+    async for p in db.participants.find({"team_code": team_code}):
+        participants.append(p)
+    for p in participants:
+        existing = await db.blocked_users.find_one({"email": p["email"]})
+        if not existing:
+            await db.blocked_users.insert_one({
+                "email": p["email"],
+                "team_code": team_code,
+                "blocked_by": admin.get("sub", "admin"),
+                "blocked_at": datetime.utcnow(),
+                "reason": f"Team {team_code} blocked"
+            })
+    await db.teams.update_one({"team_code": team_code}, {"$set": {"status": "BLOCKED"}})
+    await db.audit_logs.insert_one({
+        "action": "team_blocked",
+        "actor": admin.get("sub", "admin"),
+        "details": f"Blocked team {team_code} ({len(participants)} participants)",
+        "timestamp": datetime.utcnow()
+    })
+    return {"message": f"Team {team_code} blocked", "blocked_count": len(participants)}
+
+
+@router.post("/unblock/team/{team_code}")
+async def unblock_team(team_code: str, admin=Depends(get_admin_user)):
+    db = get_db()
+    team = await db.teams.find_one({"team_code": team_code})
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+    participants = []
+    async for p in db.participants.find({"team_code": team_code}):
+        participants.append(p)
+    for p in participants:
+        await db.blocked_users.delete_one({"email": p["email"]})
+    await db.teams.update_one({"team_code": team_code}, {"$set": {"status": "REGISTERED"}})
+    await db.audit_logs.insert_one({
+        "action": "team_unblocked",
+        "actor": admin.get("sub", "admin"),
+        "details": f"Unblocked team {team_code}",
+        "timestamp": datetime.utcnow()
+    })
+    return {"message": f"Team {team_code} unblocked"}
+
+
+@router.post("/block/participant/{email}")
+async def block_participant(email: str, admin=Depends(get_admin_user)):
+    db = get_db()
+    participant = await db.participants.find_one({"email": email.lower()})
+    if not participant:
+        raise HTTPException(status_code=404, detail="Participant not found")
+    existing = await db.blocked_users.find_one({"email": email.lower()})
+    if existing:
+        raise HTTPException(status_code=400, detail="Participant already blocked")
+    await db.blocked_users.insert_one({
+        "email": email.lower(),
+        "team_code": participant.get("team_code", ""),
+        "blocked_by": admin.get("sub", "admin"),
+        "blocked_at": datetime.utcnow(),
+        "reason": "Individually blocked"
+    })
+    await db.audit_logs.insert_one({
+        "action": "participant_blocked",
+        "actor": admin.get("sub", "admin"),
+        "details": f"Blocked participant {email}",
+        "timestamp": datetime.utcnow()
+    })
+    return {"message": f"Participant {email} blocked"}
+
+
+@router.post("/unblock/participant/{email}")
+async def unblock_participant(email: str, admin=Depends(get_admin_user)):
+    db = get_db()
+    result = await db.blocked_users.delete_one({"email": email.lower()})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Blocked record not found")
+    await db.audit_logs.insert_one({
+        "action": "participant_unblocked",
+        "actor": admin.get("sub", "admin"),
+        "details": f"Unblocked participant {email}",
+        "timestamp": datetime.utcnow()
+    })
+    return {"message": f"Participant {email} unblocked"}
+
+
+@router.get("/user-management")
+async def user_management_list(admin=Depends(get_admin_user)):
+    db = get_db()
+    teams = []
+    async for t in db.teams.find().sort("created_at", -1):
+        t["_id"] = str(t["_id"])
+        team_code = t["team_code"]
+        blocked_count = await db.blocked_users.count_documents({"team_code": team_code})
+        t["blocked_count"] = blocked_count
+        t["is_blocked"] = t.get("status") == "BLOCKED" or blocked_count > 0
+        teams.append(t)
+
+    all_participants = []
+    async for p in db.participants.find().sort("created_at", -1):
+        p["_id"] = str(p["_id"])
+        blocked = await db.blocked_users.find_one({"email": p["email"]})
+        p["is_blocked"] = blocked is not None
+        all_participants.append(p)
+
+    blocked_list = []
+    async for bu in db.blocked_users.find():
+        bu["_id"] = str(bu["_id"])
+        blocked_list.append(bu)
+
+    return {"teams": teams, "participants": all_participants, "blocked_users": blocked_list}
