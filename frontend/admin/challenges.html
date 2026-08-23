@@ -31,6 +31,16 @@
                 <div class="card-header"><h3>Imported Challenges</h3></div>
                 <div id="challengesList"><div class="flex-center" style="padding:24px;"><span class="loading-spinner"></span></div></div>
             </div>
+            <div id="deleteModal" class="modal-overlay" style="display:none;" onclick="closeDeleteModal()">
+                <div class="modal" onclick="event.stopPropagation()">
+                    <div class="modal-header"><h3>Delete Repository</h3><button class="modal-close" onclick="closeDeleteModal()">&times;</button></div>
+                    <div class="modal-body"><p id="deleteBody">Are you sure?</p></div>
+                    <div class="modal-footer">
+                        <button class="btn btn-secondary" onclick="closeDeleteModal()">Cancel</button>
+                        <button class="btn btn-danger" id="deleteConfirmBtn">Delete</button>
+                    </div>
+                </div>
+            </div>
             <div id="importModal" class="modal-overlay">
                 <div class="modal" style="max-width:560px;">
                     <div class="modal-header"><h3>New Repository</h3><button class="modal-close" onclick="closeImportModal()">&times;</button></div>
@@ -121,6 +131,25 @@
                 btn.disabled = false; btn.innerHTML = 'Import';
             }
         }
+        function showDeleteModal(code, name) {
+            document.getElementById('deleteBody').textContent = 'Delete repository "' + name + '" (' + code + ')? This will permanently remove all files from disk.';
+            document.getElementById('deleteConfirmBtn').onclick = () => { closeDeleteModal(); deleteRepo(code); };
+            document.getElementById('deleteModal').style.display = 'flex';
+        }
+        function closeDeleteModal() { document.getElementById('deleteModal').style.display = 'none'; }
+
+        async function deleteRepo(code) {
+            try {
+                const resp = await API.del('/api/admin/challenges/' + code);
+                if (resp && resp.ok) { loadChallenges(); }
+                else { const d = resp ? await resp.json() : {}; alert(d.detail || 'Failed to delete'); }
+            } catch(e) { alert('Connection error'); }
+        }
+
+        function viewRepo(code) {
+            window.location.href = '/admin/repo-viewer?code=' + encodeURIComponent(code);
+        }
+
         async function loadChallenges() {
             const resp = await API.get('/api/admin/challenges');
             if (!resp) return;
@@ -129,10 +158,19 @@
                 document.getElementById('challengesList').innerHTML = '<div class="empty-state"><div class="empty-icon">' + ICONS.inbox + '</div><h3>No challenges imported</h3><p>Click "New Repository" to add challenges</p></div>';
                 return;
             }
-            let html = '<div class="table-container"><table><thead><tr><th>Challenge</th><th>Name</th><th>Source</th><th>Status</th><th>Imported</th></tr></thead><tbody>';
+            let html = '<div class="table-container"><table><thead><tr><th>Challenge</th><th>Name</th><th>Source</th><th>Status</th><th>Imported</th><th>Actions</th></tr></thead><tbody>';
             for (const ch of data.challenges) {
                 const sourceBadge = ch.repository_source === 'upload' ? '<span class="badge badge-info">Upload</span>' : '<span class="badge badge-neutral">Link</span>';
-                html += `<tr><td><strong class="font-mono">${escapeHtml(ch.challenge_code)}</strong></td><td>${escapeHtml(ch.challenge_name || ch.challenge_code)}</td><td>${sourceBadge}</td><td>${getStatusBadge(ch.status)}</td><td>${formatDate(ch.imported_at)}</td></tr>`;
+                html += '<tr>';
+                html += '<td><strong class="font-mono">' + escapeHtml(ch.challenge_code) + '</strong></td>';
+                html += '<td>' + escapeHtml(ch.challenge_name || ch.challenge_code) + '</td>';
+                html += '<td>' + sourceBadge + '</td>';
+                html += '<td>' + getStatusBadge(ch.status) + '</td>';
+                html += '<td>' + formatDate(ch.imported_at) + '</td>';
+                html += '<td><div class="flex gap-1">';
+                html += '<button class="btn btn-sm btn-secondary" onclick="viewRepo(\'' + escapeHtml(ch.challenge_code) + '\')">View</button>';
+                html += '<button class="btn btn-sm btn-danger" onclick="showDeleteModal(\'' + escapeHtml(ch.challenge_code) + '\',\'' + escapeHtml(ch.challenge_name || ch.challenge_code) + '\')">Delete</button>';
+                html += '</div></td></tr>';
             }
             html += '</tbody></table></div>';
             document.getElementById('challengesList').innerHTML = html;

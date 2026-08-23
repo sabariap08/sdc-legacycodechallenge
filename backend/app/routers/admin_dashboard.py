@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from app.database import get_db
 from app.security import get_admin_user
+from app.utils import compute_event_status
 
 router = APIRouter(prefix="/api/admin", tags=["dashboard"])
 
@@ -17,31 +18,32 @@ async def get_dashboard(admin=Depends(get_admin_user)):
     completed = await db.checkins.count_documents({"status": "COMPLETED"})
 
     event_settings = await db.event_settings.find_one({})
-    event_status = event_settings.get("status", "DRAFT") if event_settings else "DRAFT"
-
-    all_bins = set(f"BIN-{str(i).zfill(2)}" for i in range(1, 41))
-    used_bins = set()
-    async for team in db.teams.find({}, {"bin_number": 1}):
-        used_bins.add(team.get("bin_number", ""))
+    event_status = compute_event_status(event_settings) if event_settings else "DRAFT"
 
     challenge_distribution = []
     async for ch in db.challenges.find():
         alloc_count = await db.allocations.count_documents({"challenge_code": ch["challenge_code"]})
         challenge_distribution.append({
             "challenge_code": ch["challenge_code"],
+            "challenge_name": ch.get("challenge_name", ch.get("name", ch.get("title", ch["challenge_code"]))),
             "status": ch.get("status", "UNKNOWN"),
             "allocated_teams": alloc_count
         })
+
+    allocated_teams = await db.allocations.count_documents({})
+    released_allocations = await db.allocations.count_documents({"released": True})
 
     total_submissions = await db.submissions.count_documents({})
     evaluated_submissions = await db.submissions.count_documents({"status": "evaluated"})
     notifications_count = await db.notifications.count_documents({})
 
+    alloc_state = "PENDING"
+    if event_settings:
+        alloc_state = event_settings.get("allocation_state", "PENDING")
+
     return {
         "total_teams": total_teams,
         "total_participants": total_participants,
-        "available_bins": len(all_bins - used_bins),
-        "allocated_bins": len(used_bins),
         "imported_challenges": total_challenges,
         "ready_challenges": ready_challenges,
         "registered_teams": total_teams,
@@ -52,4 +54,7 @@ async def get_dashboard(admin=Depends(get_admin_user)):
         "total_submissions": total_submissions,
         "evaluated_submissions": evaluated_submissions,
         "notifications_count": notifications_count,
+        "allocated_teams": allocated_teams,
+        "released_allocations": released_allocations,
+        "allocation_state": alloc_state,
     }

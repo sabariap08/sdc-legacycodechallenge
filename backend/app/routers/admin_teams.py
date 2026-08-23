@@ -141,8 +141,12 @@ async def get_team(team_code: str, admin=Depends(get_admin_user)):
         raise HTTPException(status_code=404, detail="Team not found")
     team["_id"] = str(team["_id"])
     participants = []
+    blocked_emails = set()
+    async for bu in db.blocked_users.find({"team_code": team_code}):
+        blocked_emails.add(bu["email"])
     async for p in db.participants.find({"team_code": team_code}):
         p["_id"] = str(p["_id"])
+        p["is_blocked"] = p["email"] in blocked_emails
         participants.append(p)
     allocation = await db.allocations.find_one({"team_code": team_code})
     if allocation:
@@ -305,6 +309,10 @@ async def user_management_list(admin=Depends(get_admin_user)):
     blocked_list = []
     async for bu in db.blocked_users.find():
         bu["_id"] = str(bu["_id"])
+        participant = await db.participants.find_one({"email": bu["email"]})
+        bu["name"] = participant.get("name", "") if participant else ""
+        team = await db.teams.find_one({"team_code": bu.get("team_code", "")})
+        bu["team_name"] = team.get("team_name", "") if team else ""
         blocked_list.append(bu)
 
     return {"teams": teams, "participants": all_participants, "blocked_users": blocked_list}

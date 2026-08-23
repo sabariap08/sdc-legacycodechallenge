@@ -67,40 +67,40 @@
 
 /* --- LIGHT THEME --- */
 [data-theme="light"] {
-    --bg-root: #f8fafc;
-    --bg-body: #f1f5f9;
-    --bg-card: #ffffff;
-    --bg-card-hover: #f8fafc;
-    --bg-input: #f1f5f9;
-    --bg-input-focus: #ffffff;
-    --bg-hover: #f1f5f9;
-    --bg-active: rgba(99, 102, 241, 0.08);
-    --bg-overlay: rgba(0, 0, 0, 0.4);
-    --bg-sidebar: #ffffff;
+    --bg-root: #faf8f5;
+    --bg-body: #f5f0eb;
+    --bg-card: #fffdf9;
+    --bg-card-hover: #fdf9f4;
+    --bg-input: #f0ebe4;
+    --bg-input-focus: #fffdf9;
+    --bg-hover: #f0ebe4;
+    --bg-active: rgba(99, 102, 241, 0.06);
+    --bg-overlay: rgba(0, 0, 0, 0.35);
+    --bg-sidebar: #fffdf9;
 
-    --text-primary: #0f172a;
-    --text-secondary: #475569;
-    --text-muted: #94a3b8;
-    --text-inverse: #f8fafc;
+    --text-primary: #2c2418;
+    --text-secondary: #5a4e3e;
+    --text-muted: #9e9284;
+    --text-inverse: #faf8f5;
 
-    --border: #e2e8f0;
-    --border-light: #cbd5e1;
+    --border: #e6ddd3;
+    --border-light: #d4c9bc;
 
-    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
-    --shadow: 0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06);
-    --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.1), 0 2px 4px rgba(0, 0, 0, 0.06);
-    --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.1), 0 4px 6px rgba(0, 0, 0, 0.05);
-    --shadow-xl: 0 20px 25px rgba(0, 0, 0, 0.15);
+    --shadow-sm: 0 1px 2px rgba(60, 40, 10, 0.04);
+    --shadow: 0 1px 3px rgba(60, 40, 10, 0.08), 0 1px 2px rgba(60, 40, 10, 0.04);
+    --shadow-md: 0 4px 6px rgba(60, 40, 10, 0.08), 0 2px 4px rgba(60, 40, 10, 0.04);
+    --shadow-lg: 0 10px 15px rgba(60, 40, 10, 0.1), 0 4px 6px rgba(60, 40, 10, 0.04);
+    --shadow-xl: 0 20px 25px rgba(60, 40, 10, 0.12);
 
     --primary-bg: rgba(99, 102, 241, 0.06);
     --primary-border: rgba(99, 102, 241, 0.2);
-    --danger-bg: rgba(239, 68, 68, 0.06);
+    --danger-bg: rgba(239, 68, 68, 0.05);
     --danger-border: rgba(239, 68, 68, 0.2);
-    --success-bg: rgba(34, 197, 94, 0.06);
+    --success-bg: rgba(34, 197, 94, 0.05);
     --success-border: rgba(34, 197, 94, 0.2);
     --warning-bg: rgba(245, 158, 11, 0.06);
     --warning-border: rgba(245, 158, 11, 0.2);
-    --secondary-bg: rgba(6, 182, 212, 0.06);
+    --secondary-bg: rgba(6, 182, 212, 0.05);
 }
 
 /* --- RESET & BASE --- */
@@ -139,6 +139,11 @@ a:hover {
 ::selection {
     background: var(--primary);
     color: white;
+}
+
+/* --- LIGHT THEME select arrow color --- */
+[data-theme="light"] .form-group select {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%239e9284' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L3 6h10z'/%3E%3C/svg%3E");
 }
 
 /* --- FOCUS VISIBLE (Accessibility) --- */

@@ -24,6 +24,11 @@ async def _authenticate_participant(team_code: str, password: str):
     if not team:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
+    if team.get("status") == "BLOCKED":
+        blocked_record = await db.blocked_users.find_one({"team_code": team["team_code"]})
+        if blocked_record:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Your account has been blocked. Contact the organizer.")
+
     auth_record = await db.team_auth.find_one({"team_code": team["team_code"]})
     if not auth_record:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Team auth not configured")
@@ -40,7 +45,7 @@ async def _authenticate_participant(team_code: str, password: str):
     await db.audit_logs.insert_one({
         "action": "participant_login",
         "actor": team["team_code"],
-        "details": "Participant logged in via " + ("email" if "@" in password else "team_code"),
+        "details": "Participant logged in via team_code",
         "timestamp": datetime.utcnow()
     })
 

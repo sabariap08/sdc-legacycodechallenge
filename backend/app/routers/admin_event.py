@@ -3,27 +3,10 @@ from pydantic import BaseModel
 from typing import Optional
 from app.database import get_db
 from app.security import get_admin_user
+from app.utils import compute_event_status
 from datetime import datetime, timezone
 
 router = APIRouter(prefix="/api/admin", tags=["event"])
-
-
-def _compute_event_status(settings: dict) -> str:
-    now = datetime.utcnow()
-    start = settings.get("event_start_time")
-    end = settings.get("event_end_time")
-    if not start or not end:
-        return settings.get("status", "DRAFT")
-    if isinstance(start, str):
-        start = datetime.fromisoformat(start.replace("Z", "+00:00")).replace(tzinfo=None)
-    if isinstance(end, str):
-        end = datetime.fromisoformat(end.replace("Z", "+00:00")).replace(tzinfo=None)
-    if now < start:
-        return "UPCOMING"
-    elif now < end:
-        return "ONGOING"
-    else:
-        return "COMPLETED"
 
 
 @router.get("/event/status")
@@ -33,7 +16,7 @@ async def get_event_status(admin=Depends(get_admin_user)):
     if not settings:
         return {"settings": None}
     settings["_id"] = str(settings["_id"])
-    computed_status = _compute_event_status(settings)
+    computed_status = compute_event_status(settings)
     now = datetime.utcnow()
     start = settings.get("event_start_time")
     end = settings.get("event_end_time")
@@ -67,7 +50,7 @@ class EventSettingsUpdate(BaseModel):
 async def update_event_settings(body: EventSettingsUpdate, admin=Depends(get_admin_user)):
     db = get_db()
     settings = await db.event_settings.find_one({})
-    computed = _compute_event_status(settings) if settings else "DRAFT"
+    computed = compute_event_status(settings) if settings else "DRAFT"
 
     if computed in ("ONGOING", "COMPLETED"):
         raise HTTPException(status_code=400, detail="Cannot modify event settings while event is ongoing or completed")
@@ -140,7 +123,7 @@ async def restart_event(body: EventRestart, admin=Depends(get_admin_user)):
 
     db = get_db()
     settings = await db.event_settings.find_one({})
-    computed = _compute_event_status(settings) if settings else "DRAFT"
+    computed = compute_event_status(settings) if settings else "DRAFT"
 
     await db.event_settings.update_one({}, {"$set": {
         "status": "DRAFT",

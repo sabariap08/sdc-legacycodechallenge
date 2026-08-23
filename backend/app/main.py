@@ -8,16 +8,20 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, RedirectResponse
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response
 from pydantic import BaseModel
 from datetime import datetime
 from app.database import connect_db, close_db, is_db_available
 from app.config import CHALLENGE_STORAGE_PATH, TEAM_WORKSPACE_PATH, EVALUATOR_PATH
 from app.security import hash_password, verify_password, create_token
 from app.database import get_db
+
+APP_VERSION = "2.0.0"
 
 app = FastAPI(title="Legacy Code Rescue Portal")
 
@@ -28,6 +32,18 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+class NoCacheMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        if request.url.path.startswith("/static/"):
+            response.headers["Cache-Control"] = "no-cache, must-revalidate"
+            response.headers["Vary"] = "Accept-Encoding"
+        return response
+
+
+app.add_middleware(NoCacheMiddleware)
 
 from app.routers import (
     admin_auth,
@@ -102,9 +118,14 @@ async def unified_login(body: LoginRequest):
             if blocked:
                 raise HTTPException(status_code=403, detail="Your account has been blocked. Contact the organizer.")
 
+            team = await db.teams.find_one({"team_code": team_code})
+            if team and team.get("status") == "BLOCKED":
+                team_blocked = await db.blocked_users.find_one({"team_code": team_code})
+                if team_blocked:
+                    raise HTTPException(status_code=403, detail="Your account has been blocked. Contact the organizer.")
+
             auth_record = await db.team_auth.find_one({"team_code": team_code})
             if auth_record and verify_password(password, auth_record["password_hash"]):
-                team = await db.teams.find_one({"team_code": team_code})
                 token = create_token({
                     "sub": team_code,
                     "role": "participant",
@@ -189,6 +210,11 @@ async def admin_users_page():
 @app.get("/admin/submissions")
 async def admin_submissions_page():
     return FileResponse(os.path.join(frontend_path, "admin", "submissions.html"))
+
+
+@app.get("/admin/repo-viewer")
+async def admin_repo_viewer_page():
+    return FileResponse(os.path.join(frontend_path, "admin", "repo_viewer.html"))
 
 
 @app.get("/participant/login")

@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Repository Viewer - Legacy Code Rescue</title>
+    <link rel="stylesheet" href="/static/css/styles.css">
+    <style>
+        .repo-viewer-layout{display:flex;height:calc(100vh - 60px);overflow:hidden;}
+        .repo-sidebar{width:280px;min-width:200px;background:var(--bg-card);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden;flex-shrink:0;}
+        .repo-sidebar-header{padding:16px;border-bottom:1px solid var(--border);flex-shrink:0;}
+        .repo-sidebar-header h3{font-size:13px;font-weight:600;color:var(--text-secondary);margin:0 0 4px 0;text-transform:uppercase;letter-spacing:0.5px;}
+        .repo-sidebar-header .repo-name{font-size:14px;font-weight:600;color:var(--text-primary);margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+        .repo-tree{flex:1;overflow-y:auto;padding:8px 0;}
+        .repo-tree-item{display:flex;align-items:center;gap:6px;padding:5px 12px 5px 16px;cursor:pointer;font-size:13px;color:var(--text-secondary);transition:background 0.15s;}
+        .repo-tree-item:hover{background:var(--bg-hover);}
+        .repo-tree-item.active{background:var(--primary-bg);color:var(--primary);font-weight:500;}
+        .repo-tree-item .icon{flex-shrink:0;width:16px;height:16px;display:flex;align-items:center;justify-content:center;}
+        .repo-tree-item .name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+        .repo-tree-item.type-dir{font-weight:500;color:var(--text-primary);}
+        .repo-tree-item.depth-0{padding-left:12px;}
+        .repo-tree-item.depth-1{padding-left:28px;}
+        .repo-tree-item.depth-2{padding-left:44px;}
+        .repo-tree-item.depth-3{padding-left:60px;}
+        .repo-tree-item.depth-4{padding-left:76px;}
+        .repo-tree-item .caret{width:14px;height:14px;flex-shrink:0;transition:transform 0.15s;}
+        .repo-tree-item .caret.open{transform:rotate(90deg);}
+        .repo-editor-area{flex:1;display:flex;flex-direction:column;overflow:hidden;}
+        .repo-file-tab{display:flex;align-items:center;gap:6px;padding:8px 16px;background:var(--bg-card);border-bottom:1px solid var(--border);font-size:13px;color:var(--text-secondary);}
+        .repo-file-tab .file-path{font-family:var(--font-mono);font-size:12px;}
+        .repo-file-tab .badge{font-size:10px;}
+        .repo-editor-container{flex:1;overflow:hidden;}
+        .repo-empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--text-muted);gap:12px;}
+        .repo-empty-state .empty-icon{width:48px;height:48px;opacity:0.4;}
+        @media (max-width:768px){
+            .repo-sidebar{width:100%;min-width:100%;max-height:40vh;border-right:none;border-bottom:1px solid var(--border);}
+            .repo-viewer-layout{flex-direction:column;}
+        }
+    </style>
+</head>
+<body>
+    <script src="/static/js/api.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.js"></script>
+    <script>
+        if (!API.isLoggedIn() || API.role !== 'admin') { window.location.href = '/login'; }
+        function logout() { API.clearAuth(); window.location.href = '/login'; }
+        document.body.innerHTML = renderAdminLayout('challenges', 'Repository Viewer');
+        initTheme();
+
+        const params = new URLSearchParams(window.location.search);
+        const challengeCode = params.get('code');
+        if (!challengeCode) { window.location.href = '/admin/challenges'; }
+
+        document.getElementById('pageContent').innerHTML = `
+            <div style="display:flex;align-items:center;gap:12px;padding:12px 16px;background:var(--bg-card);border-bottom:1px solid var(--border);">
+                <button class="btn btn-sm btn-secondary" onclick="window.location.href='/admin/challenges'">${ICONS.arrowLeft} Back to Repositories</button>
+                <h3 style="margin:0;font-size:14px;">${escapeHtml(challengeCode)}</h3>
+                <span id="repoBadge" class="badge badge-info" style="margin-left:auto;">Loading...</span>
+            </div>
+            <div class="repo-viewer-layout">
+                <div class="repo-sidebar">
+                    <div class="repo-sidebar-header">
+                        <h3>Files</h3>
+                        <p class="repo-name" id="repoName">Loading...</p>
+                    </div>
+                    <div class="repo-tree" id="repoTree"></div>
+                </div>
+                <div class="repo-editor-area">
+                    <div class="repo-file-tab" id="fileTab" style="display:none;">
+                        <span class="font-mono file-path" id="filePath"></span>
+                        <span class="badge badge-neutral" id="fileSize"></span>
+                    </div>
+                    <div class="repo-editor-container" id="editorContainer">
+                        <div class="repo-empty-state">
+                            <div>${ICONS.code || ''}</div>
+                            <p>Select a file to view its contents</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        let repoEditor = null;
+        let currentFileModel = null;
+        let monacoReady = null;
+
+        function initMonacoEditor() {
+            if (monacoReady) return monacoReady;
+            monacoReady = new Promise((resolve) => {
+                require.config({ paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs' } });
+                require(['vs/editor/editor.main'], function () {
+                    const container = document.getElementById('editorContainer');
+                    container.innerHTML = '';
+                    repoEditor = monaco.editor.create(container, {
+                        value: '',
+                        language: 'python',
+                        theme: localStorage.getItem('theme') === 'light' ? 'vs' : 'vs-dark',
+                        readOnly: true,
+                        automaticLayout: true,
+                        fontSize: 14,
+                        minimap: { enabled: true },
+                        scrollBeyondLastLine: false,
+                        wordWrap: 'on',
+                        lineNumbers: 'on',
+                        renderLineHighlight: 'line',
+                        padding: { top: 12 },
+                        scrollbar: { verticalScrollbarSize: 8, horizontalScrollbarSize: 8 }
+                    });
+                    resolve();
+                });
+            });
+            return monacoReady;
+        }
+
+        function getLanguageForFile(filename) {
+            const ext = filename.split('.').pop().toLowerCase();
+            const map = {
+                py:'python',js:'javascript',ts:'typescript',jsx:'javascript',tsx:'typescript',
+                html:'html',htm:'html',css:'css',scss:'scss',less:'less',
+                json:'json',yaml:'yaml',yml:'yaml',toml:'plaintext',
+                md:'markdown',txt:'plaintext',xml:'html',svg:'xml',
+                java:'java',c:'c',cpp:'cpp',h:'c',hpp:'cpp',cs:'csharp',
+                go:'go',rs:'rust',rb:'ruby',php:'php',swift:'swift',kt:'kotlin',
+                sh:'shell',bash:'shell',zsh:'shell',bat:'bat',ps1:'powershell',
+                sql:'sql',graphql:'graphql',proto:'protobuf',
+                Dockerfile:'dockerfile',Makefile:'makefile'
+            };
+            return map[ext] || 'plaintext';
+        }
+
+        function renderFileTree(tree, container, depth) {
+            for (const item of tree) {
+                const el = document.createElement('div');
+                el.className = 'repo-tree-item type-' + item.type + ' depth-' + Math.min(depth, 4);
+
+                if (item.type === 'directory') {
+                    el.innerHTML = '<span class="caret">&#9654;</span><span class="icon">' + ICONS.folder + '</span><span class="name">' + escapeHtml(item.name) + '</span>';
+                    const childrenContainer = document.createElement('div');
+                    childrenContainer.style.display = 'none';
+                    childrenContainer.className = 'tree-children';
+                    el.onclick = () => {
+                        const caret = el.querySelector('.caret');
+                        const isOpen = childrenContainer.style.display !== 'none';
+                        childrenContainer.style.display = isOpen ? 'none' : '';
+                        if (caret) caret.classList.toggle('open', !isOpen);
+                    };
+                    container.appendChild(el);
+                    container.appendChild(childrenContainer);
+                    if (item.children && item.children.length > 0) {
+                        renderFileTree(item.children, childrenContainer, depth + 1);
+                    }
+                } else {
+                    el.innerHTML = '<span class="icon">' + ICONS.file + '</span><span class="name">' + escapeHtml(item.name) + '</span>';
+                    el.dataset.path = item.path;
+                    el.dataset.name = item.name;
+                    el.onclick = (e) => {
+                        document.querySelectorAll('.repo-tree-item').forEach(x => x.classList.remove('active'));
+                        el.classList.add('active');
+                        openFile(item.path, item.name);
+                    };
+                    container.appendChild(el);
+                }
+            }
+        }
+
+        async function openFile(path, name) {
+            document.getElementById('fileTab').style.display = 'flex';
+            document.getElementById('filePath').textContent = path;
+
+            try {
+                const resp = await API.get('/api/admin/challenges/' + challengeCode + '/file?path=' + encodeURIComponent(path));
+                if (!resp) return;
+                const data = await resp.json();
+
+                if (data.truncated || data.binary) {
+                    document.getElementById('fileSize').textContent = data.binary ? 'Binary' : 'Truncated';
+                    document.getElementById('editorContainer').innerHTML = '<div class="repo-empty-state"><p>' + escapeHtml(data.content) + '</p></div>';
+                    if (repoEditor) { repoEditor.dispose(); repoEditor = null; monacoReady = null; }
+                    return;
+                }
+
+                document.getElementById('fileSize').textContent = '';
+
+                if (!repoEditor) {
+                    await initMonacoEditor();
+                }
+
+                if (currentFileModel) { currentFileModel.dispose(); }
+                currentFileModel = monaco.editor.createModel(data.content, getLanguageForFile(name));
+                repoEditor.setModel(currentFileModel);
+                repoEditor.layout();
+            } catch(e) {
+                document.getElementById('editorContainer').innerHTML = '<div class="repo-empty-state"><p>Error loading file</p></div>';
+            }
+        }
+
+        async function loadRepoTree() {
+            try {
+                const resp = await API.get('/api/admin/challenges/' + challengeCode + '/file-tree');
+                if (!resp) return;
+                const data = await resp.json();
+                document.getElementById('repoName').textContent = data.challenge_name || challengeCode;
+                document.getElementById('repoBadge').textContent = (data.tree || []).length + ' items';
+                const treeEl = document.getElementById('repoTree');
+                treeEl.innerHTML = '';
+                renderFileTree(data.tree || [], treeEl, 0);
+            } catch(e) {
+                document.getElementById('repoTree').innerHTML = '<p style="padding:16px;color:var(--text-muted);font-size:13px;">Failed to load repository</p>';
+            }
+        }
+
+        loadRepoTree();
+    </script>
+</body>
+</html>

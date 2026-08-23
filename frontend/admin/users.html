@@ -84,7 +84,7 @@
                     if (blocked) {
                         html += '<button class="btn btn-sm btn-success" onclick="unblockTeamAction(\'' + t.team_code + '\')">' + ICONS.unlock + ' Unblock</button>';
                     } else {
-                        html += '<button class="btn btn-sm btn-danger" onclick="blockTeamAction(\'' + t.team_code + '\',\'' + escapeHtml(t.team_name) + '\')">' + ICONS.shieldOff + ' Block</button>';
+                        html += '<button class="btn btn-sm btn-danger" onclick="blockTeamAction(\'' + t.team_code + '\',\'' + escapeHtml(t.team_name) + '\')">' + ICONS.ban + ' Block</button>';
                     }
                     html += '</div></td></tr>';
                 }
@@ -106,7 +106,7 @@
                     if (p.is_blocked) {
                         html += '<button class="btn btn-sm btn-success" onclick="unblockParticipantAction(\'' + escapeHtml(p.email) + '\')">' + ICONS.unlock + ' Unblock</button>';
                     } else {
-                        html += '<button class="btn btn-sm btn-danger" onclick="blockParticipantAction(\'' + escapeHtml(p.email) + '\')">' + ICONS.shieldOff + ' Block</button>';
+                        html += '<button class="btn btn-sm btn-danger" onclick="blockParticipantAction(\'' + escapeHtml(p.email) + '\')">' + ICONS.ban + ' Block</button>';
                     }
                     html += '</td></tr>';
                 }
@@ -117,11 +117,12 @@
                     el.innerHTML = '<div class="empty-state"><div class="empty-icon">' + ICONS.checkCircle + '</div><h3>No blocked users</h3><p>All users are currently active</p></div>';
                     return;
                 }
-                let html = '<div class="table-container"><table><thead><tr><th>Email</th><th>Team</th><th>Reason</th><th>Blocked At</th><th>Action</th></tr></thead><tbody>';
+                let html = '<div class="table-container"><table><thead><tr><th>Name</th><th>Email</th><th>Team</th><th>Reason</th><th>Blocked At</th><th>Action</th></tr></thead><tbody>';
                 for (const b of data.blocked_users) {
                     html += '<tr>';
-                    html += '<td><strong>' + escapeHtml(b.email) + '</strong></td>';
-                    html += '<td><span class="font-mono">' + escapeHtml(b.team_code || '') + '</span></td>';
+                    html += '<td><strong>' + escapeHtml(b.name || '-') + '</strong></td>';
+                    html += '<td>' + escapeHtml(b.email) + '</td>';
+                    html += '<td><span class="font-mono">' + escapeHtml(b.team_code || '') + '</span> ' + (b.team_name ? '(' + escapeHtml(b.team_name) + ')' : '') + '</td>';
                     html += '<td>' + escapeHtml(b.reason || '-') + '</td>';
                     html += '<td>' + formatDate(b.blocked_at) + '</td>';
                     html += '<td><button class="btn btn-sm btn-success" onclick="unblockParticipantAction(\'' + escapeHtml(b.email) + '\')">' + ICONS.unlock + ' Unblock</button></td>';

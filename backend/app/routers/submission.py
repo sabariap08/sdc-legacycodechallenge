@@ -5,27 +5,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from app.database import get_db
 from app.security import get_participant_user
 from app.config import TEAM_WORKSPACE_PATH, EVALUATOR_PATH
+from app.utils import compute_event_status
 from datetime import datetime
 
 router = APIRouter(prefix="/api/submission", tags=["submission"])
-
-
-def _compute_event_status(settings):
-    now = datetime.utcnow()
-    start = settings.get("event_start_time") if settings else None
-    end = settings.get("event_end_time") if settings else None
-    if not start or not end:
-        return settings.get("status", "DRAFT") if settings else "DRAFT"
-    if isinstance(start, str):
-        start = datetime.fromisoformat(start.replace("Z", "+00:00")).replace(tzinfo=None)
-    if isinstance(end, str):
-        end = datetime.fromisoformat(end.replace("Z", "+00:00")).replace(tzinfo=None)
-    if now < start:
-        return "UPCOMING"
-    elif now < end:
-        return "ONGOING"
-    else:
-        return "COMPLETED"
 
 
 @router.post("/submit")
@@ -34,7 +17,7 @@ async def submit_final(user=Depends(get_participant_user)):
     team_code = user.get("sub")
 
     settings = await db.event_settings.find_one({})
-    computed = _compute_event_status(settings)
+    computed = compute_event_status(settings)
 
     if computed not in ("ONGOING", "COMPLETED"):
         raise HTTPException(status_code=403, detail="Event has not started yet")
@@ -161,7 +144,7 @@ async def submission_status(user=Depends(get_participant_user)):
 
     settings = await db.event_settings.find_one({})
     allow_multiple = settings.get("allow_multiple_submissions", False) if settings else False
-    computed = _compute_event_status(settings)
+    computed = compute_event_status(settings)
 
     all_subs = []
     async for s in db.submissions.find({"team_code": team_code}).sort("submitted_at", -1):

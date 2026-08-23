@@ -6,12 +6,6 @@
     <title>Teams - Legacy Code Rescue</title>
     <link rel="stylesheet" href="/static/css/styles.css">
     <style>
-        .alloc-step{display:flex;align-items:center;gap:6px;padding:8px 14px;border-radius:var(--radius);font-size:13px;font-weight:500;background:var(--bg-input);border:1px solid var(--border);color:var(--text-muted)}
-        .alloc-step.active{border-color:var(--primary);color:var(--primary);background:var(--primary-bg)}
-        .alloc-step.done{border-color:var(--success);color:var(--success);background:var(--success-bg)}
-        .alloc-arrow{color:var(--text-muted);font-size:14px}
-        .alloc-step .step-dot{width:8px;height:8px;border-radius:50%;background:currentColor}
-        .alloc-state{display:flex;align-items:center;gap:8px;margin-bottom:20px}
     </style>
 </head>
 <body>
@@ -32,7 +26,6 @@
                     <button class="btn btn-secondary" onclick="showRandomAlloc()" id="allocBtn">${ICONS.randomize} Random Allocation</button>
                 </div>
             </div>
-            <div id="allocStateWrap"></div>
             <div id="allocNotice" class="info-message mb-2" style="display:none;"></div>
             <div class="card">
                 <div id="error-msg" class="error-message"></div>
@@ -62,29 +55,69 @@
         function closeAllocModal() { document.getElementById('allocModal').style.display = 'none'; }
 
         async function showRandomAlloc() {
-            const resp = await API.get('/api/admin/allocation');
-            if (!resp) return;
-            const data = await resp.json();
-            const state = data.allocation_state || 'PENDING';
-            if (state === 'RELEASED' || state === 'COMPLETED') {
-                showError('error-msg', 'Allocations already released. Cannot regenerate.');
+            let eventStatus = 'UPCOMING';
+            try {
+                const statusResp = await API.get('/api/admin/event/status');
+                if (statusResp) {
+                    const sd = await statusResp.json();
+                    eventStatus = sd.computed_status || 'UPCOMING';
+                }
+            } catch(e) {}
+
+            if (eventStatus === 'ONGOING') {
+                showError('error-msg', 'Challenge allocation is locked because the event is live.');
                 return;
             }
-            showAllocModal('Random Allocation', 'This will randomly assign challenges to all teams. Existing allocations will be replaced. Continue?', async () => {
-                try {
-                    const r = await API.post('/api/admin/allocation/generate', {});
-                    const d = await r.json();
-                    if (r.ok) {
-                        showSuccess('success-msg', 'Allocation generated for ' + d.allocations.length + ' teams. Click release to make it visible to participants.');
-                        loadTeams();
-                    } else { showError('error-msg', d.detail || 'Failed'); }
-                } catch(e) { showError('error-msg', 'Connection error'); }
-            });
+
+            const allocResp = await API.get('/api/admin/allocation');
+            let hasExisting = false;
+            if (allocResp) {
+                const ad = await allocResp.json();
+                hasExisting = ad.allocations && ad.allocations.length > 0;
+            }
+
+            if (hasExisting) {
+                showAllocModal('Reallocate Challenges?', 'Existing challenge assignments will be replaced with a new balanced random allocation.', doAllocation);
+            } else {
+                doAllocation();
+            }
+        }
+
+        async function doAllocation() {
+            const btn = document.getElementById('allocBtn');
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading-spinner"></span> Allocating...';
+            hideError('error-msg');
+            hideSuccess('success-msg');
+            try {
+                const genResp = await API.post('/api/admin/allocation/generate', {});
+                if (!genResp) {
+                    showError('error-msg', 'Connection error');
+                    btn.disabled = false;
+                    btn.innerHTML = ICONS.randomize + ' Random Allocation';
+                    return;
+                }
+                const genData = await genResp.json();
+                if (!genResp.ok) {
+                    showError('error-msg', genData.detail || 'Allocation failed');
+                    btn.disabled = false;
+                    btn.innerHTML = ICONS.randomize + ' Random Allocation';
+                    return;
+                }
+                showSuccess('success-msg', 'Challenges reallocated successfully. ' + genData.count + ' teams assigned and released to participants.');
+                loadTeams();
+            } catch(e) {
+                showError('error-msg', 'Connection error during allocation');
+            }
+            btn.disabled = false;
+            btn.innerHTML = ICONS.randomize + ' Random Allocation';
         }
 
         async function loadTeams() {
             document.getElementById('teamDetail').style.display = 'none';
             document.getElementById('wizardWrap').style.display = 'none';
+            const pageHeader = document.querySelector('.page-content > .page-header');
+            if (pageHeader) pageHeader.style.display = '';
             const card = document.querySelector('.page-content > .card');
             if (card) card.style.display = '';
 
@@ -93,30 +126,13 @@
                 if (statusResp) {
                     const sd = await statusResp.json();
                     const cs = sd.computed_status;
-                    if (cs === 'ONGOING' || cs === 'COMPLETED') {
+                    if (cs === 'ONGOING') {
                         document.getElementById('allocBtn').disabled = true;
                     } else {
                         document.getElementById('allocBtn').disabled = false;
                     }
                 }
             } catch(e) {}
-
-            const resp = await API.get('/api/admin/allocation');
-            if (resp) {
-                const aData = await resp.json();
-                const state = aData.allocation_state || 'PENDING';
-                const steps = ['PENDING','GENERATED','RELEASED'];
-                const labels = {PENDING:'Pending',GENERATED:'Generated',RELEASED:'Released'};
-                let html = '<div class="alloc-state">';
-                const idx = steps.indexOf(state);
-                for (let i = 0; i < steps.length; i++) {
-                    const cls = i < idx ? 'done' : i === idx ? 'active' : '';
-                    html += '<div class="alloc-step ' + cls + '"><span class="step-dot"></span>' + labels[steps[i]] + '</div>';
-                    if (i < steps.length - 1) html += '<span class="alloc-arrow">&#8594;</span>';
-                }
-                html += '</div>';
-                document.getElementById('allocStateWrap').innerHTML = html;
-            }
 
             const teamsResp = await API.get('/api/admin/teams');
             if (!teamsResp) return;
@@ -135,20 +151,20 @@
 
             let html = '<div class="table-container"><table><thead><tr><th>Team Code</th><th>Team Name</th><th>Members</th><th>Challenge</th><th>Status</th><th>Actions</th></tr></thead><tbody>';
             for (const t of tData.teams) {
-                const chall = allocMap[t.team_code] || '<span class="text-muted">-</span>';
+                const challCode = allocMap[t.team_code] || null;
                 const blocked = t.status === 'BLOCKED';
                 html += '<tr style="' + (blocked ? 'opacity:.6;' : '') + '">';
                 html += '<td><strong class="font-mono">' + escapeHtml(t.team_code) + '</strong></td>';
                 html += '<td>' + escapeHtml(t.team_name) + (blocked ? ' <span class="badge badge-danger">BLOCKED</span>' : '') + '</td>';
                 html += '<td>' + t.participant_count + '</td>';
-                html += '<td>' + (typeof chall === 'string' ? '<span class="badge badge-info">' + escapeHtml(chall) + '</span>' : chall) + '</td>';
+                html += '<td>' + (challCode ? '<span class="badge badge-info">' + escapeHtml(challCode) + '</span>' : '<span class="text-muted">Not allocated</span>') + '</td>';
                 html += '<td>' + getStatusBadge(t.status) + '</td>';
                 html += '<td><div class="flex gap-1">';
                 html += '<button class="btn btn-sm btn-secondary" onclick="viewTeam(\'' + t.team_code + '\')">View</button>';
                 if (blocked) {
                     html += '<button class="btn btn-sm btn-success" onclick="unblockTeam(\'' + t.team_code + '\')">' + ICONS.unlock + ' Unblock</button>';
                 } else {
-                    html += '<button class="btn btn-sm btn-danger" onclick="blockTeam(\'' + t.team_code + '\',\'' + escapeHtml(t.team_name) + '\')">' + ICONS.shieldOff + ' Block</button>';
+                    html += '<button class="btn btn-sm btn-danger" onclick="blockTeam(\'' + t.team_code + '\',\'' + escapeHtml(t.team_name) + '\')">' + ICONS.ban + ' Block</button>';
                 }
                 html += '<button class="btn btn-sm btn-danger" onclick="deleteTeam(\'' + t.team_code + '\',\'' + escapeHtml(t.team_name) + '\')">Delete</button>';
                 html += '</div></td></tr>';
@@ -170,12 +186,11 @@
                 if (p.is_team_leader) participantsHtml += ' <span class="badge badge-info">LEADER</span>';
                 participantsHtml += '</div></div>';
                 participantsHtml += '<div style="margin-top:6px;font-size:12px;color:var(--text-muted);word-break:break-word;">' + escapeHtml(p.email) + (p.roll_number ? ' | Roll: ' + escapeHtml(p.roll_number) : '') + (p.college ? ' | ' + escapeHtml(p.college) : '') + '</div>';
-                const blocked = await isBlocked(p.email);
                 participantsHtml += '<div style="margin-top:8px;">';
-                if (blocked) {
+                if (p.is_blocked) {
                     participantsHtml += '<button class="btn btn-sm btn-success" onclick="unblockParticipant(\'' + escapeHtml(p.email) + '\')">' + ICONS.unlock + ' Unblock</button>';
                 } else {
-                    participantsHtml += '<button class="btn btn-sm btn-danger" onclick="blockParticipant(\'' + escapeHtml(p.email) + '\')">' + ICONS.shieldOff + ' Block</button>';
+                    participantsHtml += '<button class="btn btn-sm btn-danger" onclick="blockParticipant(\'' + escapeHtml(p.email) + '\')">' + ICONS.ban + ' Block</button>';
                 }
                 participantsHtml += '</div></div>';
             }
@@ -197,7 +212,10 @@
                 submissionHtml += '</div>';
             }
 
-            document.querySelector('.page-content > .card').style.display = 'none';
+            const teamsContent = document.getElementById('teamsContent');
+            const pageHeader = document.querySelector('.page-content > .page-header');
+            if (teamsContent) teamsContent.closest('.card').style.display = 'none';
+            if (pageHeader) pageHeader.style.display = 'none';
             document.getElementById('teamDetail').style.display = 'block';
             document.getElementById('teamDetail').innerHTML = `
                 <div class="team-detail-header">
@@ -207,7 +225,7 @@
                         <p><span class="font-mono">${escapeHtml(t.team_code)}</span> &middot; ${t.participant_count} members &middot; ${getStatusBadge(t.status)}</p>
                     </div>
                     <div style="margin-left:auto;display:flex;gap:8px;">
-                        ${t.status === 'BLOCKED' ? '<button class="btn btn-sm btn-success" onclick="unblockTeam(\'' + t.team_code + '\')">' + ICONS.unlock + ' Unblock Team</button>' : '<button class="btn btn-sm btn-danger" onclick="blockTeam(\'' + t.team_code + '\',\'' + escapeHtml(t.team_name) + '\')">' + ICONS.shieldOff + ' Block Team</button>'}
+                        ${t.status === 'BLOCKED' ? '<button class="btn btn-sm btn-success" onclick="unblockTeam(\'' + t.team_code + '\')">' + ICONS.unlock + ' Unblock Team</button>' : '<button class="btn btn-sm btn-danger" onclick="blockTeam(\'' + t.team_code + '\',\'' + escapeHtml(t.team_name) + '\')">' + ICONS.ban + ' Block Team</button>'}
                         <button class="btn btn-secondary btn-sm" onclick="loadTeams()">Back to List</button>
                     </div>
                 </div>
@@ -218,13 +236,6 @@
                         <div class="card"><div class="card-header"><h3>Submission</h3></div>${submissionHtml}</div>
                     </div>
                 </div>`;
-        }
-
-        async function isBlocked(email) {
-            const resp = await API.get('/api/admin/user-management');
-            if (!resp) return false;
-            const data = await resp.json();
-            return data.blocked_users.some(b => b.email === email);
         }
 
         async function blockTeam(code, name) {
@@ -267,7 +278,10 @@
         }
 
         function showCreateWizard() {
-            document.querySelector('.page-content > .card').style.display = 'none';
+            const pageHeader = document.querySelector('.page-content > .page-header');
+            const card = document.querySelector('.page-content > .card');
+            if (pageHeader) pageHeader.style.display = 'none';
+            if (card) card.style.display = 'none';
             document.getElementById('teamDetail').style.display = 'none';
             document.getElementById('wizardWrap').style.display = 'block';
             document.getElementById('wizardWrap').innerHTML = `

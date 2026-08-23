@@ -63,6 +63,33 @@ def _get_challenge_storage_path(challenge_code: str) -> str:
     return os.path.join(os.path.abspath(CHALLENGE_STORAGE_PATH), challenge_code)
 
 
+def _build_repo_file_tree(root_path: str, rel_path: str = "") -> list:
+    tree = []
+    full = os.path.join(root_path, rel_path)
+    if not os.path.exists(full):
+        return tree
+    ignore_dirs = {'.git', '__pycache__', 'node_modules', '.venv', 'venv', 'env', '.env'}
+    for entry in sorted(os.listdir(full)):
+        if entry in ignore_dirs:
+            continue
+        entry_rel = os.path.join(rel_path, entry) if rel_path else entry
+        entry_full = os.path.join(root_path, entry_rel)
+        if os.path.isdir(entry_full):
+            tree.append({
+                "name": entry,
+                "path": entry_rel.replace("\\", "/"),
+                "type": "directory",
+                "children": _build_repo_file_tree(root_path, entry_rel)
+            })
+        else:
+            tree.append({
+                "name": entry,
+                "path": entry_rel.replace("\\", "/"),
+                "type": "file"
+            })
+    return tree
+
+
 class ChallengeImport(BaseModel):
     challenge_code: str
     repository_url: str
@@ -266,3 +293,82 @@ async def list_challenges(admin=Depends(get_admin_user)):
         ch["_id"] = str(ch["_id"])
         challenges.append(ch)
     return {"challenges": challenges}
+
+
+@router.delete("/challenges/{challenge_code}")
+async def delete_challenge(challenge_code: str, admin=Depends(get_admin_user)):
+    db = get_db()
+    challenge = await db.challenges.find_one({"challenge_code": challenge_code})
+    if not challenge:
+        raise HTTPException(status_code=404, detail="Challenge not found")
+
+    storage_path = challenge.get("storage_path", "")
+    if storage_path and os.path.exists(storage_path):
+        shutil.rmtree(storage_path)
+
+    await db.challenges.delete_one({"challenge_code": challenge_code})
+
+    await db.audit_logs.insert_one({
+        "action": "repository_deleted",
+        "actor": admin.get("sub", "admin"),
+        "details": f"Deleted repository {challenge_code} ({challenge.get('challenge_name', '')})",
+        "timestamp": datetime.utcnow()
+    })
+
+    return {"message": f"Repository {challenge_code} deleted successfully"}
+
+
+@router.get("/challenges/{challenge_code}/file-tree")
+async def get_repo_file_tree(challenge_code: str, admin=Depends(get_admin_user)):
+    challenge = await get_db().challenges.find_one({"challenge_code": challenge_code})
+    if not challenge:
+        raise HTTPException(status_code=404, detail="Challenge not found")
+
+    storage_path = challenge.get("storage_path", "")
+    if not storage_path or not os.path.exists(storage_path):
+        raise HTTPException(status_code=404, detail="Repository files not found on disk")
+
+    tree = _build_repo_file_tree(storage_path)
+    return {"tree": tree, "challenge_code": challenge_code, "challenge_name": challenge.get("challenge_name", challenge_code)}
+
+
+@router.get("/challenges/{challenge_code}/file")
+async def get_repo_file(challenge_code: str, path: str, admin=Depends(get_admin_user)):
+    challenge = await get_db().challenges.find_one({"challenge_code": challenge_code})
+    if not challenge:
+        raise HTTPException(status_code=404, detail="Challenge not found")
+
+    storage_path = challenge.get("storage_path", "")
+    if not storage_path or not os.path.exists(storage_path):
+        raise HTTPException(status_code=404, detail="Repository files not found on disk")
+
+    if not _is_safe_path(path):
+        raise HTTPException(status_code=400, detail="Invalid file path")
+
+    file_path = os.path.normpath(os.path.join(storage_path, path))
+    if not file_path.startswith(os.path.normpath(storage_path)):
+        raise HTTPException(status_code=403, detail="Path traversal detected")
+
+    if not os.path.exists(file_path) or not os.path.isfile(file_path):
+        raise HTTPException(status_code=404, detail="File not found")
+
+    max_size = 512 * 1024
+    file_size = os.path.getsize(file_path)
+    if file_size > max_size:
+        return {"content": f"# File too large to display ({file_size} bytes). Maximum preview size is 512 KB.", "path": path, "truncated": True}
+
+    binary_extensions = {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.svg', '.webp',
+                         '.exe', '.dll', '.so', '.dylib', '.bin', '.zip', '.tar', '.gz',
+                         '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+                         '.mp3', '.mp4', '.avi', '.mov', '.wav', '.ogg'}
+    _, ext = os.path.splitext(file_path.lower())
+    if ext in binary_extensions:
+        return {"content": f"# Binary file cannot be previewed ({file_size} bytes)", "path": path, "binary": True}
+
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+            content = f.read()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error reading file: {str(e)}")
+
+    return {"content": content, "path": path, "binary": False}

@@ -1,27 +1,10 @@
 from fastapi import APIRouter, Depends
 from app.database import get_db
 from app.security import get_participant_user
+from app.utils import compute_event_status
 from datetime import datetime
 
 router = APIRouter(prefix="/api/participant", tags=["participant_dashboard"])
-
-
-def _compute_event_status(settings):
-    now = datetime.utcnow()
-    start = settings.get("event_start_time") if settings else None
-    end = settings.get("event_end_time") if settings else None
-    if not start or not end:
-        return settings.get("status", "DRAFT") if settings else "DRAFT"
-    if isinstance(start, str):
-        start = datetime.fromisoformat(start.replace("Z", "+00:00")).replace(tzinfo=None)
-    if isinstance(end, str):
-        end = datetime.fromisoformat(end.replace("Z", "+00:00")).replace(tzinfo=None)
-    if now < start:
-        return "UPCOMING"
-    elif now < end:
-        return "ONGOING"
-    else:
-        return "COMPLETED"
 
 
 @router.get("/dashboard")
@@ -41,7 +24,7 @@ async def participant_dashboard(user=Depends(get_participant_user)):
     allocation = await db.allocations.find_one({"team_code": team_code})
 
     event_settings = await db.event_settings.find_one({})
-    computed = _compute_event_status(event_settings)
+    computed = compute_event_status(event_settings)
 
     now = datetime.utcnow()
     remaining_seconds = None
@@ -88,7 +71,6 @@ async def participant_dashboard(user=Depends(get_participant_user)):
     return {
         "team_code": team.get("team_code"),
         "team_name": team.get("team_name"),
-        "bin_number": team.get("bin_number"),
         "participants": participants,
         "event_status": computed,
         "event_start_time": event_settings.get("event_start_time") if event_settings else None,
@@ -112,7 +94,7 @@ async def participant_event_countdown(user=Depends(get_participant_user)):
     db = get_db()
     event_settings = await db.event_settings.find_one({})
     now = datetime.utcnow()
-    computed = _compute_event_status(event_settings)
+    computed = compute_event_status(event_settings)
     countdown_seconds = None
     remaining_seconds = None
     if event_settings:

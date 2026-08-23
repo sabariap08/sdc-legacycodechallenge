@@ -7,6 +7,7 @@ let eventEnd = null;
 let codeDetails = null;
 let autoSubmitted = false;
 let serverTimeOffset = 0;
+let currentModel = null;
 
 if (!API.isLoggedIn() || API.role !== 'participant') {
     window.location.href = '/login';
@@ -212,11 +213,25 @@ function createTab(path) {
     const tab = document.createElement('div');
     tab.className = 'ide-tab active';
     tab.id = 'tab_' + path.replace(/[^a-zA-Z0-9]/g, '_');
-    tab.innerHTML = `
-        <span class="tab-name">${filename}</span>
-        <span class="status-indicator"></span>
-        <span class="close" onclick="event.stopPropagation(); closeFile('${path.replace(/'/g, "\\'")}')">×</span>
-    `;
+
+    const tabName = document.createElement('span');
+    tabName.className = 'tab-name';
+    tabName.textContent = filename;
+
+    const statusDot = document.createElement('span');
+    statusDot.className = 'status-indicator';
+
+    const closeBtn = document.createElement('span');
+    closeBtn.className = 'close';
+    closeBtn.textContent = '\u00d7';
+    closeBtn.onclick = function(e) {
+        e.stopPropagation();
+        closeFile(path);
+    };
+
+    tab.appendChild(tabName);
+    tab.appendChild(statusDot);
+    tab.appendChild(closeBtn);
     tab.addEventListener('click', () => switchToFile(path));
     tabs.appendChild(tab);
 }
@@ -228,8 +243,11 @@ function switchToFile(path) {
     const file = openFiles[path];
 
     if (editor && monacoLoaded) {
-        const model = monaco.editor.createModel(file.content, file.language);
-        editor.setModel(model);
+        if (currentModel) {
+            currentModel.dispose();
+        }
+        currentModel = monaco.editor.createModel(file.content, file.language);
+        editor.setModel(currentModel);
     }
 
     document.querySelectorAll('.ide-tab').forEach(t => t.classList.remove('active'));
@@ -267,8 +285,6 @@ function saveFile() {
     if (!activeFile || !openFiles[activeFile]) return;
 
     const content = editor.getValue();
-    openFiles[activeFile].content = content;
-    openFiles[activeFile].modified = false;
 
     const btn = document.getElementById('saveBtn');
     btn.innerHTML = '<span class="loading-spinner"></span>';
@@ -285,7 +301,9 @@ function saveFile() {
     .then(r => r.json())
     .then(data => {
         if (data.message) {
-            btn.innerHTML = 'Saved ✓';
+            openFiles[activeFile].content = content;
+            openFiles[activeFile].modified = false;
+            btn.innerHTML = 'Saved \u2713';
             btn.style.background = 'var(--success)';
             setTimeout(() => {
                 btn.innerHTML = 'Save';

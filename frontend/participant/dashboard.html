@@ -147,7 +147,7 @@
     <script src="/static/js/api.js"></script>
     <script>
         if (!API.isLoggedIn() || API.role !== 'participant') { window.location.href = '/login'; }
-        function logout() { API.clearAuth(); window.location.href = '/login'; }
+        function logout() { API.clearAuth(); try { localStorage.removeItem('tc_accepted'); } catch(e) {} window.location.href = '/login'; }
 
         let serverTimeOffset = 0;
         async function syncServerTime() {
@@ -259,6 +259,21 @@
         }
 
         /* ==================== ONGOING DASHBOARD ==================== */
+        function hasAcceptedTC() {
+            try { return localStorage.getItem('tc_accepted') === 'true'; } catch(e) { return false; }
+        }
+        function acceptTC() {
+            try { localStorage.setItem('tc_accepted', 'true'); } catch(e) {}
+            const modal = document.getElementById('tcModal');
+            if (modal) modal.style.display = 'none';
+            const ideLink = document.getElementById('ideLink');
+            if (ideLink) ideLink.style.display = '';
+        }
+        function showTCModal() {
+            const modal = document.getElementById('tcModal');
+            if (modal) modal.style.display = 'flex';
+        }
+
         function renderOngoingDashboard(data) {
             document.body.innerHTML = renderParticipantLayout('dashboard', 'Dashboard');
             initTheme();
@@ -305,6 +320,27 @@
                     <div class="card">
                         <div class="card-header"><h3>Announcements</h3></div>
                         <div id="announcements"><div class="flex-center" style="padding:16px;"><span class="loading-spinner"></span></div></div>
+                    </div>
+                </div>
+
+                <div id="tcModal" style="position:fixed;inset:0;background:var(--bg-overlay);z-index:2000;display:none;align-items:center;justify-content:center;padding:16px;">
+                    <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-md);padding:28px;max-width:560px;width:100%;max-height:85vh;overflow-y:auto;box-shadow:var(--shadow-xl);">
+                        <h2 style="font-size:20px;font-weight:700;margin-bottom:16px;color:var(--text-primary);">Terms & Conditions</h2>
+                        <div style="font-size:13px;color:var(--text-secondary);line-height:1.7;margin-bottom:20px;">
+                            <p style="margin-bottom:12px;">By proceeding to the IDE, you agree to the following:</p>
+                            <ol style="padding-left:20px;margin-bottom:12px;">
+                                <li style="margin-bottom:8px;"><strong>Academic Integrity:</strong> This challenge is designed for learning and assessment. Any attempt to exploit vulnerabilities in the platform infrastructure (rather than the provided code) is strictly prohibited.</li>
+                                <li style="margin-bottom:8px;"><strong>Fair Play:</strong> Each team must work independently. Sharing solutions, code, or hints with other teams during the event is not allowed.</li>
+                                <li style="margin-bottom:8px;"><strong>Code Submissions:</strong> All code submitted through the platform becomes part of your team's official submission. Ensure your code compiles and runs correctly before submitting.</li>
+                                <li style="margin-bottom:8px;"><strong>Time Limit:</strong> The event timer begins when you first open the IDE. Manage your time carefully as the timer cannot be paused or extended.</li>
+                                <li style="margin-bottom:8px;"><strong>Conduct:</strong> Respect all participants and organizers. Harassment, cheating, or any form of misconduct will result in disqualification.</li>
+                            </ol>
+                            <p style="font-size:12px;color:var(--text-muted);">Failure to comply with these terms may result in immediate disqualification from the event.</p>
+                        </div>
+                        <div style="display:flex;gap:8px;justify-content:flex-end;">
+                            <button class="btn btn-ghost" onclick="logout()">Decline & Logout</button>
+                            <button class="btn btn-primary" onclick="acceptTC()">Accept & Continue</button>
+                        </div>
                     </div>
                 </div>`;
             populateDashboard(data);
@@ -391,7 +427,14 @@
                         </div>
                     </div>`;
                 const ideLink = document.getElementById('ideLink');
-                if (ideLink) ideLink.style.display = '';
+                if (ideLink) {
+                    if (hasAcceptedTC()) {
+                        ideLink.style.display = '';
+                    } else {
+                        ideLink.style.display = 'none';
+                        ideLink.onclick = function(e) { e.preventDefault(); showTCModal(); return false; };
+                    }
+                }
             } else {
                 document.getElementById('challengeInfo').innerHTML = '<p style="color:var(--text-muted); font-size:15px;">Challenge not yet released</p><p style="color:var(--text-muted); font-size:13px; margin-top:4px;">Wait for the organizer to release allocations</p>';
             }
@@ -427,6 +470,7 @@
                     renderCompleted(data.team_name, data.team_code, data.submission);
                 } else {
                     renderOngoingDashboard(data);
+                    if (!hasAcceptedTC()) { setTimeout(showTCModal, 500); }
                 }
             } catch (err) { console.error('Dashboard error:', err); }
         }

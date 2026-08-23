@@ -6,7 +6,7 @@ from typing import Optional, List
 from app.database import get_db
 from app.security import get_participant_user
 from app.config import CHALLENGE_STORAGE_PATH, TEAM_WORKSPACE_PATH
-from app.utils import sanitize_path
+from app.utils import sanitize_path, compute_event_status
 from datetime import datetime
 
 router = APIRouter(prefix="/api/workspace", tags=["workspace"])
@@ -101,31 +101,13 @@ class SaveFileRequest(BaseModel):
     content: str
 
 
-def _compute_event_status(settings):
-    now = datetime.utcnow()
-    start = settings.get("event_start_time") if settings else None
-    end = settings.get("event_end_time") if settings else None
-    if not start or not end:
-        return settings.get("status", "DRAFT") if settings else "DRAFT"
-    if isinstance(start, str):
-        start = datetime.fromisoformat(start.replace("Z", "+00:00")).replace(tzinfo=None)
-    if isinstance(end, str):
-        end = datetime.fromisoformat(end.replace("Z", "+00:00")).replace(tzinfo=None)
-    if now < start:
-        return "UPCOMING"
-    elif now < end:
-        return "ONGOING"
-    else:
-        return "COMPLETED"
-
-
 @router.post("/file/save")
 async def save_file(body: SaveFileRequest, user=Depends(get_participant_user)):
     db = get_db()
     team_code = user.get("sub")
 
     settings = await db.event_settings.find_one({})
-    computed = _compute_event_status(settings)
+    computed = compute_event_status(settings)
     if computed == "COMPLETED":
         raise HTTPException(status_code=403, detail="Event has ended. No more edits allowed.")
 
