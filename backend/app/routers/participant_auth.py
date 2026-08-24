@@ -36,6 +36,14 @@ async def _authenticate_participant(team_code: str, password: str):
     if not verify_password(password, auth_record["password_hash"]):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
+    participants = []
+    async for p in db.participants.find({"team_code": team["team_code"]}):
+        participants.append(p)
+    for p in participants:
+        blocked = await db.blocked_users.find_one({"email": p["email"].lower().strip()})
+        if blocked:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Your account has been blocked. Contact the organizer.")
+
     token = create_token({
         "sub": team["team_code"],
         "role": "participant",

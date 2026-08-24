@@ -86,6 +86,9 @@ async def test_code(body: TestRequest, user=Depends(get_participant_user)):
     challenge_code = alloc["challenge_code"]
     workspace = _get_workspace(team_code, challenge_code)
 
+    if not os.path.exists(workspace):
+        raise HTTPException(status_code=404, detail="Workspace not found. Please initialize your workspace first.")
+
     command = body.command or _detect_test_command(workspace)
 
     try:

@@ -6,6 +6,9 @@ from app.security import get_admin_user, hash_password
 from app.utils import generate_team_code, generate_bin_number
 from datetime import datetime
 import secrets
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/admin", tags=["teams"])
 
@@ -176,6 +179,7 @@ async def delete_team(team_code: str, admin=Depends(get_admin_user)):
     await db.submissions.delete_one({"team_code": team_code})
     await db.checkins.delete_one({"team_code": team_code})
     await db.notifications.delete_many({"team_code": team_code})
+    await db.blocked_users.delete_many({"team_code": team_code})
 
     await db.audit_logs.insert_one({
         "action": "team_deleted",
@@ -207,16 +211,18 @@ async def block_team(team_code: str, admin=Depends(get_admin_user)):
     async for p in db.participants.find({"team_code": team_code}):
         participants.append(p)
     for p in participants:
-        existing = await db.blocked_users.find_one({"email": p["email"]})
+        email_lower = p["email"].lower().strip()
+        existing = await db.blocked_users.find_one({"email": email_lower})
         if not existing:
             await db.blocked_users.insert_one({
-                "email": p["email"],
+                "email": email_lower,
                 "team_code": team_code,
                 "blocked_by": admin.get("sub", "admin"),
                 "blocked_at": datetime.utcnow(),
                 "reason": f"Team {team_code} blocked"
             })
     await db.teams.update_one({"team_code": team_code}, {"$set": {"status": "BLOCKED"}})
+    logger.info("Team %s blocked by %s (%d participants)", team_code, admin.get("sub", "admin"), len(participants))
     await db.audit_logs.insert_one({
         "action": "team_blocked",
         "actor": admin.get("sub", "admin"),
@@ -236,8 +242,10 @@ async def unblock_team(team_code: str, admin=Depends(get_admin_user)):
     async for p in db.participants.find({"team_code": team_code}):
         participants.append(p)
     for p in participants:
-        await db.blocked_users.delete_one({"email": p["email"]})
+        email_lower = p["email"].lower().strip()
+        await db.blocked_users.delete_one({"email": email_lower})
     await db.teams.update_one({"team_code": team_code}, {"$set": {"status": "REGISTERED"}})
+    logger.info("Team %s unblocked by %s", team_code, admin.get("sub", "admin"))
     await db.audit_logs.insert_one({
         "action": "team_unblocked",
         "actor": admin.get("sub", "admin"),

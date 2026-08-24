@@ -111,9 +111,10 @@ function formatDate(dateStr) {
 }
 
 function escapeHtml(text) {
+    if (text === null || text === undefined) return '';
     const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
+    div.textContent = String(text);
+    return div.innerHTML.replace(/'/g, '&#39;').replace(/"/g, '&quot;');
 }
 
 function getStatusBadge(status) {
@@ -254,7 +255,6 @@ function renderParticipantLayout(currentPage, pageTitle) {
             </div>
             <nav>
                 <a href="/participant/dashboard" class="${currentPage === 'dashboard' ? 'active' : ''}" onclick="closeSidebar()"><span class="nav-icon">${ICONS.dashboard}</span>Dashboard</a>
-                <a href="/participant/ide" id="ideLink" style="display:none;" class="${currentPage === 'ide' ? 'active' : ''}" onclick="closeSidebar()"><span class="nav-icon">${ICONS.code}</span>IDE</a>
             </nav>
             <div class="sidebar-footer">
                 <a href="#" class="nav-link sidebar-logout" onclick="event.preventDefault(); logout();">

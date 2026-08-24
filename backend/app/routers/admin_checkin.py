@@ -4,6 +4,7 @@ from typing import Optional
 from app.database import get_db
 from app.security import get_admin_user
 from datetime import datetime
+import re
 
 router = APIRouter(prefix="/api/admin", tags=["checkin"])
 
@@ -58,11 +59,12 @@ async def list_checkins(
     db = get_db()
     query = {}
     if search:
-        team = await db.teams.find_one({"team_code": {"$regex": search, "$options": "i"}})
+        safe = re.escape(search.strip())
+        team = await db.teams.find_one({"team_code": {"$regex": safe, "$options": "i"}})
         if team:
             query["team_code"] = team["team_code"]
         else:
-            team = await db.teams.find_one({"team_name": {"$regex": search, "$options": "i"}})
+            team = await db.teams.find_one({"team_name": {"$regex": safe, "$options": "i"}})
             if team:
                 query["team_code"] = team["team_code"]
             else:

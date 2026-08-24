@@ -1,5 +1,6 @@
 import os
 import shutil
+import logging
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import Optional, List
@@ -8,6 +9,8 @@ from app.security import get_participant_user
 from app.config import CHALLENGE_STORAGE_PATH, TEAM_WORKSPACE_PATH
 from app.utils import sanitize_path, compute_event_status
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/workspace", tags=["workspace"])
 
@@ -24,6 +27,24 @@ def _init_workspace(team_code: str, challenge_code: str) -> str:
             shutil.copytree(source, workspace, dirs_exist_ok=True)
         else:
             os.makedirs(workspace, exist_ok=True)
+    return workspace
+
+
+async def _init_workspace_async(team_code: str, challenge_code: str) -> str:
+    workspace = _get_workspace_path(team_code, challenge_code)
+    if not os.path.exists(workspace):
+        source = os.path.join(CHALLENGE_STORAGE_PATH, challenge_code)
+        if os.path.exists(source):
+            shutil.copytree(source, workspace, dirs_exist_ok=True)
+        else:
+            os.makedirs(workspace, exist_ok=True)
+            try:
+                from app.storage import load_files_from_db
+                await load_files_from_db(challenge_code, source)
+                if os.path.exists(source) and os.listdir(source):
+                    shutil.copytree(source, workspace, dirs_exist_ok=True)
+            except Exception as e:
+                logger.warning("Could not recover challenge files from DB for %s: %s", challenge_code, e)
     return workspace
 
 
@@ -60,7 +81,7 @@ async def get_file_tree(user=Depends(get_participant_user)):
         raise HTTPException(status_code=403, detail="Challenge not yet released")
 
     challenge_code = alloc["challenge_code"]
-    workspace = _init_workspace(team_code, challenge_code)
+    workspace = await _init_workspace_async(team_code, challenge_code)
     tree = _build_file_tree(workspace)
     return {"tree": tree, "challenge_code": challenge_code}
 

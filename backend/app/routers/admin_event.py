@@ -154,7 +154,7 @@ async def get_event_countdown(admin=Depends(get_admin_user)):
     settings = await db.event_settings.find_one({})
     if not settings:
         return {"server_time": datetime.utcnow().isoformat(), "status": "DRAFT"}
-    computed = _compute_event_status(settings)
+    computed = compute_event_status(settings)
     return {
         "server_time": datetime.utcnow().isoformat(),
         "status": computed,

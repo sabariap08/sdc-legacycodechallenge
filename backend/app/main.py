@@ -259,6 +259,11 @@ async def startup():
                 logger.info("Default admin created")
         except Exception as e:
             logger.error("Admin seed failed: %s", e)
+        try:
+            from app.storage import recover_all_challenges
+            await recover_all_challenges()
+        except Exception as e:
+            logger.error("Challenge recovery failed: %s", e)
         logger.info("Startup complete!")
     else:
         logger.warning("Startup complete (MongoDB unavailable - will retry in background)")

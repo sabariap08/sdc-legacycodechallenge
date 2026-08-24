@@ -21,9 +21,23 @@ function logout() {
 require.config({ paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs' } });
 require(['vs/editor/editor.main'], function () {
     monacoLoaded = true;
+    checkTCAndLoadIDE();
+});
+
+async function checkTCAndLoadIDE() {
+    try {
+        const resp = await API.get('/api/participant/tc-status');
+        if (resp && resp.ok) {
+            const data = await resp.json();
+            if (!data.accepted) {
+                window.location.href = '/participant/dashboard';
+                return;
+            }
+        }
+    } catch (e) {}
     initEditor();
     loadIDE();
-});
+}
 
 function initEditor() {
     const container = document.getElementById('editorContainer');

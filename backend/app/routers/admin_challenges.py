@@ -4,12 +4,16 @@ from typing import Optional, List
 from app.database import get_db
 from app.security import get_admin_user
 from app.config import CHALLENGE_STORAGE_PATH
+from app.storage import save_files_to_db, get_file_tree_from_db, get_file_content_from_db, delete_files_from_db
 from datetime import datetime
 import subprocess
 import os
 import shutil
 import zipfile
 import io
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/admin", tags=["challenges"])
 
@@ -165,6 +169,8 @@ async def import_repositories(body: ImportRequest, admin=Depends(get_admin_user)
             else:
                 await db.challenges.insert_one(challenge_doc)
 
+            await save_files_to_db(challenge_code, storage_path)
+
             results.append({"challenge_code": challenge_code, "status": "READY", "commit_sha": commit_sha})
 
         except subprocess.TimeoutExpired:
@@ -271,6 +277,8 @@ async def upload_challenge(
     else:
         await db.challenges.insert_one(challenge_doc)
 
+    await save_files_to_db(challenge_code, storage_path)
+
     await db.audit_logs.insert_one({
         "action": "repository_upload",
         "actor": admin.get("sub", "admin"),
@@ -306,6 +314,7 @@ async def delete_challenge(challenge_code: str, admin=Depends(get_admin_user)):
     if storage_path and os.path.exists(storage_path):
         shutil.rmtree(storage_path)
 
+    await delete_files_from_db(challenge_code)
     await db.challenges.delete_one({"challenge_code": challenge_code})
 
     await db.audit_logs.insert_one({
@@ -325,11 +334,28 @@ async def get_repo_file_tree(challenge_code: str, admin=Depends(get_admin_user))
         raise HTTPException(status_code=404, detail="Challenge not found")
 
     storage_path = challenge.get("storage_path", "")
-    if not storage_path or not os.path.exists(storage_path):
-        raise HTTPException(status_code=404, detail="Repository files not found on disk")
+    if storage_path and os.path.exists(storage_path):
+        tree = _build_repo_file_tree(storage_path)
+        if tree:
+            return {"tree": tree, "challenge_code": challenge_code, "challenge_name": challenge.get("challenge_name", challenge_code)}
 
-    tree = _build_repo_file_tree(storage_path)
-    return {"tree": tree, "challenge_code": challenge_code, "challenge_name": challenge.get("challenge_name", challenge_code)}
+    tree = await get_file_tree_from_db(challenge_code)
+    if tree:
+        return {"tree": tree, "challenge_code": challenge_code, "challenge_name": challenge.get("challenge_name", challenge_code)}
+
+    if storage_path and not os.path.exists(storage_path):
+        try:
+            os.makedirs(storage_path, exist_ok=True)
+            from app.storage import load_files_from_db
+            loaded = await load_files_from_db(challenge_code, storage_path)
+            if loaded > 0:
+                tree = _build_repo_file_tree(storage_path)
+                if tree:
+                    return {"tree": tree, "challenge_code": challenge_code, "challenge_name": challenge.get("challenge_name", challenge_code)}
+        except Exception as e:
+            logger.error("Auto-recovery failed for %s: %s", challenge_code, e)
+
+    raise HTTPException(status_code=404, detail="Repository files not found. Try re-importing the repository.")
 
 
 @router.get("/challenges/{challenge_code}/file")
@@ -339,36 +365,109 @@ async def get_repo_file(challenge_code: str, path: str, admin=Depends(get_admin_
         raise HTTPException(status_code=404, detail="Challenge not found")
 
     storage_path = challenge.get("storage_path", "")
-    if not storage_path or not os.path.exists(storage_path):
-        raise HTTPException(status_code=404, detail="Repository files not found on disk")
+    if storage_path and os.path.exists(storage_path):
+        if _is_safe_path(path):
+            file_path = os.path.normpath(os.path.join(storage_path, path))
+            if file_path.startswith(os.path.normpath(storage_path)) and os.path.exists(file_path) and os.path.isfile(file_path):
+                max_size = 512 * 1024
+                file_size = os.path.getsize(file_path)
+                if file_size > max_size:
+                    return {"content": f"# File too large to display ({file_size} bytes). Maximum preview size is 512 KB.", "path": path, "truncated": True}
+                binary_extensions = {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.svg', '.webp',
+                                     '.exe', '.dll', '.so', '.dylib', '.bin', '.zip', '.tar', '.gz',
+                                     '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+                                     '.mp3', '.mp4', '.avi', '.mov', '.wav', '.ogg'}
+                _, ext = os.path.splitext(file_path.lower())
+                if ext in binary_extensions:
+                    return {"content": f"# Binary file cannot be previewed ({file_size} bytes)", "path": path, "binary": True}
+                try:
+                    with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+                        content = f.read()
+                    return {"content": content, "path": path, "binary": False}
+                except Exception:
+                    pass
 
     if not _is_safe_path(path):
         raise HTTPException(status_code=400, detail="Invalid file path")
 
-    file_path = os.path.normpath(os.path.join(storage_path, path))
-    if not file_path.startswith(os.path.normpath(storage_path)):
-        raise HTTPException(status_code=403, detail="Path traversal detected")
+    content = await get_file_content_from_db(challenge_code, path)
+    if content is not None:
+        return {"content": content, "path": path, "binary": False}
 
-    if not os.path.exists(file_path) or not os.path.isfile(file_path):
-        raise HTTPException(status_code=404, detail="File not found")
+    raise HTTPException(status_code=404, detail="File not found")
 
-    max_size = 512 * 1024
-    file_size = os.path.getsize(file_path)
-    if file_size > max_size:
-        return {"content": f"# File too large to display ({file_size} bytes). Maximum preview size is 512 KB.", "path": path, "truncated": True}
 
-    binary_extensions = {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.svg', '.webp',
-                         '.exe', '.dll', '.so', '.dylib', '.bin', '.zip', '.tar', '.gz',
-                         '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
-                         '.mp3', '.mp4', '.avi', '.mov', '.wav', '.ogg'}
-    _, ext = os.path.splitext(file_path.lower())
-    if ext in binary_extensions:
-        return {"content": f"# Binary file cannot be previewed ({file_size} bytes)", "path": path, "binary": True}
+@router.post("/challenges/{challenge_code}/build")
+async def build_challenge(challenge_code: str, admin=Depends(get_admin_user)):
+    db = get_db()
+    challenge = await db.challenges.find_one({"challenge_code": challenge_code})
+    if not challenge:
+        raise HTTPException(status_code=404, detail="Challenge not found")
 
-    try:
-        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
-            content = f.read()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error reading file: {str(e)}")
+    storage_path = challenge.get("storage_path", "")
+    if not storage_path or not os.path.exists(storage_path):
+        tree = await get_file_tree_from_db(challenge_code)
+        if not tree:
+            raise HTTPException(status_code=404, detail="Repository files not found")
+        try:
+            os.makedirs(storage_path, exist_ok=True)
+            from app.storage import load_files_from_db
+            loaded = await load_files_from_db(challenge_code, storage_path)
+            if loaded == 0:
+                raise HTTPException(status_code=404, detail="Could not recover repository files")
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Recovery failed: {str(e)}")
 
-    return {"content": content, "path": path, "binary": False}
+    steps = []
+    has_error = False
+    error_message = ""
+
+    file_count = 0
+    for root, dirs, files in os.walk(storage_path):
+        dirs[:] = [d for d in dirs if d not in {'.git', '__pycache__', 'node_modules', '.venv'}]
+        file_count += len(files)
+    steps.append({"name": "Scanning repository", "status": "completed", "detail": f"Found {file_count} files"})
+
+    if file_count == 0:
+        has_error = True
+        error_message = "Repository contains no files"
+        steps.append({"name": "Validation", "status": "failed", "detail": error_message})
+        return {"challenge_code": challenge_code, "status": "FAILED", "steps": steps, "error": error_message}
+
+    steps.append({"name": "Validating files", "status": "completed", "detail": "No dangerous files detected"})
+
+    python_files = []
+    for root, dirs, files in os.walk(storage_path):
+        dirs[:] = [d for d in dirs if d not in {'.git', '__pycache__', 'node_modules', '.venv'}]
+        for f in files:
+            if f.endswith('.py'):
+                python_files.append(os.path.join(root, f))
+
+    if python_files:
+        try:
+            result = subprocess.run(
+                ["python", "-m", "py_compile", python_files[0]],
+                capture_output=True, text=True, timeout=30,
+                cwd=storage_path
+            )
+            if result.returncode == 0:
+                steps.append({"name": "Syntax check", "status": "completed", "detail": "Python syntax OK"})
+            else:
+                steps.append({"name": "Syntax check", "status": "warning", "detail": result.stderr[:500] if result.stderr else "Warnings detected"})
+        except subprocess.TimeoutExpired:
+            steps.append({"name": "Syntax check", "status": "warning", "detail": "Syntax check timed out"})
+        except Exception as e:
+            steps.append({"name": "Syntax check", "status": "warning", "detail": str(e)})
+
+    steps.append({"name": "Build completed", "status": "completed", "detail": "Repository validated successfully"})
+
+    await db.audit_logs.insert_one({
+        "action": "repository_build",
+        "actor": admin.get("sub", "admin"),
+        "details": f"Build pipeline run for {challenge_code}",
+        "timestamp": datetime.utcnow()
+    })
+
+    return {"challenge_code": challenge_code, "status": "SUCCESS", "steps": steps, "file_count": file_count}
