@@ -151,8 +151,6 @@ async def participant_dashboard(user=Depends(get_participant_user)):
                 "description": ch.get("description", ""),
             }
 
-    allow_multiple = event_settings.get("allow_multiple_submissions", False) if event_settings else False
-
     return {
         "team_code": team.get("team_code"),
         "team_name": team.get("team_name"),
@@ -169,7 +167,6 @@ async def participant_dashboard(user=Depends(get_participant_user)):
         },
         "challenge": challenge_info,
         "submission": submission,
-        "allow_multiple_submissions": allow_multiple,
         "leaderboard_enabled": event_settings.get("leaderboard_enabled", False) if event_settings else False,
     }
 

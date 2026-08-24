@@ -454,8 +454,7 @@
                     </div>
                     <p style="font-size:13px;"><strong>Submitted:</strong> ${formatDate(data.submission.submitted_at)}</p>
                     <p style="font-size:13px;margin-top:4px;">${getStatusBadge(data.submission.status)}</p>
-                    ${data.submission.auto_submitted ? '<p style="font-size:12px; color:var(--warning); margin-top:4px;">Auto-submitted (time expired)</p>' : ''}
-                    ${data.allow_multiple_submissions ? '<p style="font-size:12px; color:var(--text-muted); margin-top:4px;">You may resubmit while the event is active.</p>' : ''}`;
+                    ${data.submission.auto_submitted ? '<p style="font-size:12px; color:var(--warning); margin-top:4px;">Auto-submitted (time expired)</p>' : ''}`;
             }
 
             let annHtml = '';

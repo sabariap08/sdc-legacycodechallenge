@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Event History - Legacy Code Rescue</title>
+    <link rel="stylesheet" href="/static/css/styles.css">
+    <style>
+        .history-status { display:inline-flex; align-items:center; gap:4px; padding:3px 10px; border-radius:var(--radius-full); font-size:11px; font-weight:600; }
+        .history-status.upcoming { background:var(--warning-bg); color:var(--warning); border:1px solid var(--warning-border); }
+        .history-status.ongoing { background:var(--success-bg); color:var(--success); border:1px solid var(--success-border); }
+        .history-status.completed { background:var(--primary-bg); color:var(--primary); border:1px solid var(--primary-border); }
+        .history-status.cancelled, .history-status.draft { background:var(--bg-hover); color:var(--text-muted); border:1px solid var(--border); }
+        .event-code-cell { font-family:var(--font-mono); font-weight:600; color:var(--primary); }
+        @media (max-width:768px) {
+            .history-card-mobile { display:block !important; }
+            .history-table-wrap { display:none !important; }
+        }
+        .history-card-mobile { display:none; background:var(--bg-card); border:1px solid var(--border); border-radius:var(--radius-md); padding:16px; margin-bottom:12px; }
+        .history-card-mobile .card-row { display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-bottom:1px solid var(--border); }
+        .history-card-mobile .card-row:last-child { border-bottom:none; }
+        .history-card-mobile .card-label { font-size:11px; font-weight:600; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px; }
+        .history-card-mobile .card-value { font-size:13px; color:var(--text-primary); font-weight:500; }
+    </style>
+</head>
+<body>
+    <script src="/static/js/api.js"></script>
+    <script>
+        if (!API.isLoggedIn() || API.role !== 'admin') { window.location.href = '/login'; }
+        function logout() { API.clearAuth(); window.location.href = '/login'; }
+        document.body.innerHTML = renderAdminLayout('event', 'Event History');
+        initTheme();
+        document.getElementById('pageContent').innerHTML = `
+            <div class="page-header with-actions">
+                <div><h1>Event History</h1><p>All past and current event records</p></div>
+                <div style="display:flex;gap:8px;">
+                    <a href="/admin/event" class="btn btn-secondary btn-sm" style="text-decoration:none;">${ICONS.arrowLeft} Back to Event Control</a>
+                    <button class="btn btn-ghost btn-sm" onclick="loadHistory()">${ICONS.refresh} Refresh</button>
+                </div>
+            </div>
+            <div id="historyContent">
+                <div class="flex-center" style="padding:48px;"><span class="loading-spinner"></span></div>
+            </div>
+        `;
+
+        function formatDateLocal(dateStr) {
+            if (!dateStr) return 'N/A';
+            const d = new Date(dateStr);
+            return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+        }
+
+        async function loadHistory() {
+            const el = document.getElementById('historyContent');
+            el.innerHTML = '<div class="flex-center" style="padding:48px;"><span class="loading-spinner"></span></div>';
+            try {
+                const resp = await API.get('/api/admin/event/history');
+                if (!resp) { el.innerHTML = '<p class="text-muted" style="font-size:13px;">Failed to load history</p>'; return; }
+                const data = await resp.json();
+                if (!data.history || data.history.length === 0) {
+                    el.innerHTML = '<div class="empty-state"><div class="empty-icon">' + ICONS.clipboard + '</div><h3>No Event History</h3><p>Event records will appear here after events are restarted or completed.</p></div>';
+                    return;
+                }
+                let tableHtml = '<div class="card"><div class="table-container history-table-wrap"><table><thead><tr><th>Unique Code</th><th>Start</th><th>End</th><th>Duration</th><th>Status</th><th>Archived</th></tr></thead><tbody>';
+                let cardsHtml = '';
+                for (const h of data.history) {
+                    const status = (h.status || 'unknown').toLowerCase();
+                    const dur = h.event_duration_minutes || 300;
+                    const durH = Math.floor(dur / 60);
+                    const durM = dur % 60;
+                    const durStr = durH > 0 ? durH + 'h' + (durM > 0 ? ' ' + durM + 'm' : '') : durM + 'm';
+                    tableHtml += '<tr>';
+                    tableHtml += '<td><span class="event-code-cell">' + escapeHtml(h.event_code || '-') + '</span></td>';
+                    tableHtml += '<td>' + formatDateLocal(h.event_start_time) + '</td>';
+                    tableHtml += '<td>' + formatDateLocal(h.event_end_time) + '</td>';
+                    tableHtml += '<td>' + durStr + '</td>';
+                    tableHtml += '<td><span class="history-status ' + status + '">' + escapeHtml(h.status || '-') + '</span></td>';
+                    tableHtml += '<td>' + formatDateLocal(h.archived_at) + '</td>';
+                    tableHtml += '</tr>';
+                    cardsHtml += '<div class="history-card-mobile">';
+                    cardsHtml += '<div class="card-row"><span class="card-label">Code</span><span class="card-value event-code-cell">' + escapeHtml(h.event_code || '-') + '</span></div>';
+                    cardsHtml += '<div class="card-row"><span class="card-label">Start</span><span class="card-value">' + formatDateLocal(h.event_start_time) + '</span></div>';
+                    cardsHtml += '<div class="card-row"><span class="card-label">End</span><span class="card-value">' + formatDateLocal(h.event_end_time) + '</span></div>';
+                    cardsHtml += '<div class="card-row"><span class="card-label">Duration</span><span class="card-value">' + durStr + '</span></div>';
+                    cardsHtml += '<div class="card-row"><span class="card-label">Status</span><span class="history-status ' + status + '">' + escapeHtml(h.status || '-') + '</span></div>';
+                    cardsHtml += '<div class="card-row"><span class="card-label">Archived</span><span class="card-value">' + formatDateLocal(h.archived_at) + '</span></div>';
+                    cardsHtml += '</div>';
+                }
+                tableHtml += '</tbody></table></div></div>';
+                el.innerHTML = tableHtml + cardsHtml;
+            } catch (e) { el.innerHTML = '<p class="text-muted" style="font-size:13px;">Failed to load history</p>'; }
+        }
+
+        loadHistory();
+    </script>
+</body>
+</html>

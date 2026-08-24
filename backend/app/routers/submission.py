@@ -32,15 +32,13 @@ async def submit_final(user=Depends(get_participant_user)):
     if not os.path.exists(workspace):
         raise HTTPException(status_code=404, detail="Workspace not found")
 
-    allow_multiple = settings.get("allow_multiple_submissions", False) if settings else False
-
     existing = await db.submissions.find_one(
         {"team_code": team_code, "challenge_code": challenge_code},
         sort=[("submitted_at", -1)]
     )
 
-    if existing and not allow_multiple:
-        raise HTTPException(status_code=400, detail="Submission already exists. Multiple submissions are not allowed.")
+    if existing:
+        raise HTTPException(status_code=400, detail="Submission already exists.")
 
     evaluation_result = await _run_evaluation(workspace, challenge_code, team_code)
     score = sum(1 for r in evaluation_result.get("results", []) if r.get("passed", False))
@@ -143,7 +141,6 @@ async def submission_status(user=Depends(get_participant_user)):
         return {"submitted": False}
 
     settings = await db.event_settings.find_one({})
-    allow_multiple = settings.get("allow_multiple_submissions", False) if settings else False
     computed = compute_event_status(settings)
 
     all_subs = []
@@ -161,9 +158,8 @@ async def submission_status(user=Depends(get_participant_user)):
         "version": sub.get("version", 1),
         "auto_submitted": sub.get("auto_submitted", False),
         "results": sub.get("evaluation_result", {}).get("results", []),
-        "allow_multiple_submissions": allow_multiple,
         "event_status": computed,
-        "history": all_subs if allow_multiple else [],
+        "history": [],
     }
 
 

@@ -169,6 +169,11 @@ async def admin_event_page():
     return FileResponse(os.path.join(frontend_path, "admin", "event.html"))
 
 
+@app.get("/admin/history")
+async def admin_history_page():
+    return FileResponse(os.path.join(frontend_path, "admin", "history.html"))
+
+
 @app.get("/admin/audit")
 async def admin_audit_page():
     return FileResponse(os.path.join(frontend_path, "admin", "audit.html"))
