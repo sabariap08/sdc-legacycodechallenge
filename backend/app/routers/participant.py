@@ -4,7 +4,6 @@ from app.database import get_db
 from app.security import verify_password, create_token, hash_password, get_admin_user, get_participant_user
 from app.utils import compute_event_status
 from datetime import datetime
-from typing import Optional
 
 router = APIRouter(prefix="/api/participant", tags=["participant"])
 
@@ -48,6 +47,18 @@ async def _authenticate_participant(team_code: str, password: str):
         blocked = await db.blocked_users.find_one({"email": p["email"].lower().strip()})
         if blocked:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Your account has been blocked. Contact the organizer.")
+
+    settings = await db.event_settings.find_one({})
+    computed = compute_event_status(settings) if settings else "DRAFT"
+    if computed == "ONGOING":
+        event_code = settings.get("event_code") if settings else None
+        if event_code:
+            checkin = await db.checkins.find_one({"team_code": team["team_code"], "event_code": event_code, "checked_in": True})
+            if not checkin:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Your team has not been checked in for the current event yet. Please wait for the event administrator to complete your check-in."
+                )
 
     token = create_token({
         "sub": team["team_code"],

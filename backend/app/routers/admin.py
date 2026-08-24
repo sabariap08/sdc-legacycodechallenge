@@ -214,8 +214,7 @@ async def delete_team(team_code: str, admin=Depends(get_admin_user)):
     await db.team_auth.delete_one({"team_code": team_code})
     await db.allocations.delete_one({"team_code": team_code})
     await db.submissions.delete_one({"team_code": team_code})
-    await db.checkins.delete_one({"team_code": team_code})
-    await db.notifications.delete_many({"team_code": team_code})
+    await db.checkins.delete_many({"team_code": team_code})
     await db.blocked_users.delete_many({"team_code": team_code})
 
     await db.audit_logs.insert_one({
@@ -349,23 +348,6 @@ async def user_management_list(admin=Depends(get_admin_user)):
 # ─────────────────────────────────────────────
 # CHALLENGES / REPOSITORIES
 # ─────────────────────────────────────────────
-
-ALLOWED_EXTENSIONS = {
-    '.py', '.js', '.ts', '.jsx', '.tsx', '.html', '.css', '.scss', '.less',
-    '.java', '.c', '.cpp', '.h', '.hpp', '.cs', '.go', '.rs', '.rb',
-    '.php', '.swift', '.kt', '.scala', '.r', '.R', '.m', '.sql',
-    '.sh', '.bash', '.zsh', '.fish', '.ps1', '.bat', '.cmd',
-    '.json', '.yaml', '.yml', '.toml', '.xml', '.ini', '.cfg', '.conf',
-    '.md', '.txt', '.rst', '.csv', '.tsv',
-    '.gitignore', '.dockerignore', '.editorconfig', '.env', '.env.example',
-    'Makefile', 'Dockerfile', 'docker-compose.yml', 'docker-compose.yaml',
-    'requirements.txt', 'setup.py', 'setup.cfg', 'pyproject.toml',
-    'package.json', 'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml',
-    'Cargo.toml', 'Cargo.lock', 'go.mod', 'go.sum',
-    'Gemfile', 'Gemfile.lock', 'Podfile', 'Podfile.lock',
-    'build.gradle', 'pom.xml', 'settings.gradle',
-    'CMakeLists.txt',
-}
 
 DANGEROUS_EXTENSIONS = {
     '.exe', '.msi', '.dll', '.so', '.dylib', '.bin', '.cmd', '.com',
@@ -875,7 +857,6 @@ async def restart_event(body: EventRestart, admin=Depends(get_admin_user)):
 
     await db.allocations.delete_many({})
     await db.submissions.delete_many({})
-    await db.workspaces.delete_many({})
     await db.checkins.delete_many({})
 
     new_event_code = generate_event_code()
@@ -1197,46 +1178,86 @@ async def delete_announcement(announcement_id: str, admin=Depends(get_admin_user
 # CHECK-IN
 # ─────────────────────────────────────────────
 
-class CheckinUpdate(BaseModel):
+# ─────────────────────────────────────────────
+# CHECK-IN (event-specific)
+# ─────────────────────────────────────────────
+
+class CheckinAction(BaseModel):
     team_code: str
-    status: str
 
 
 @router.post("/checkin")
-async def update_checkin(body: CheckinUpdate, admin=Depends(get_admin_user)):
+async def checkin_team(body: CheckinAction, admin=Depends(get_admin_user)):
     db = get_db()
-    valid_statuses = ["REGISTERED", "CHECKED-IN", "STARTED", "COMPLETED"]
-    if body.status not in valid_statuses:
-        raise HTTPException(status_code=400, detail=f"Invalid status. Must be one of {valid_statuses}")
+    settings = await db.event_settings.find_one({})
+    if not settings:
+        raise HTTPException(status_code=400, detail="No event configured")
+    event_code = settings.get("event_code")
+    if not event_code:
+        raise HTTPException(status_code=400, detail="Event has no code")
 
     team = await db.teams.find_one({"team_code": body.team_code})
     if not team:
         raise HTTPException(status_code=404, detail="Team not found")
 
-    existing = await db.checkins.find_one({"team_code": body.team_code})
+    existing = await db.checkins.find_one({"team_code": body.team_code, "event_code": event_code})
     if existing:
-        await db.checkins.update_one(
-            {"team_code": body.team_code},
-            {"$set": {"status": body.status, "updated_at": datetime.utcnow()}}
-        )
-    else:
-        await db.checkins.insert_one({
-            "team_code": body.team_code,
-            "status": body.status,
-            "created_at": datetime.utcnow(),
-            "updated_at": datetime.utcnow()
-        })
+        return {
+            "message": f"Team {body.team_code} is already checked in for this event",
+            "checked_in": True,
+            "checked_in_at": existing.get("checked_in_at"),
+        }
 
-    await db.teams.update_one({"team_code": body.team_code}, {"$set": {"status": body.status}})
+    now = datetime.utcnow()
+    await db.checkins.update_one(
+        {"team_code": body.team_code, "event_code": event_code},
+        {"$set": {
+            "team_code": body.team_code,
+            "event_code": event_code,
+            "checked_in": True,
+            "checked_in_at": now,
+            "checked_in_by": admin.get("sub", "admin"),
+            "updated_at": now,
+        }},
+        upsert=True
+    )
 
     await db.audit_logs.insert_one({
-        "action": "checkin_updated",
+        "action": "checkin",
         "actor": admin.get("sub", "admin"),
-        "details": f"Team {body.team_code} status -> {body.status}",
+        "details": f"Team {body.team_code} checked in for event {event_code}",
+        "timestamp": now
+    })
+
+    return {"message": f"Team {body.team_code} checked in successfully", "checked_in": True, "checked_in_at": now.isoformat()}
+
+
+@router.delete("/checkin/{team_code}")
+async def uncheckin_team(team_code: str, admin=Depends(get_admin_user)):
+    db = get_db()
+    settings = await db.event_settings.find_one({})
+    if not settings:
+        raise HTTPException(status_code=400, detail="No event configured")
+    event_code = settings.get("event_code")
+    if not event_code:
+        raise HTTPException(status_code=400, detail="Event has no code")
+
+    team = await db.teams.find_one({"team_code": team_code})
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+
+    result = await db.checkins.delete_one({"team_code": team_code, "event_code": event_code})
+    if result.deleted_count == 0:
+        return {"message": f"Team {team_code} was not checked in", "checked_in": False}
+
+    await db.audit_logs.insert_one({
+        "action": "checkin_removed",
+        "actor": admin.get("sub", "admin"),
+        "details": f"Team {team_code} check-in removed for event {event_code}",
         "timestamp": datetime.utcnow()
     })
 
-    return {"message": f"Team {body.team_code} marked as {body.status}"}
+    return {"message": f"Team {team_code} check-in removed", "checked_in": False}
 
 
 @router.get("/checkin")
@@ -1245,27 +1266,45 @@ async def list_checkins(
     admin=Depends(get_admin_user)
 ):
     db = get_db()
+    settings = await db.event_settings.find_one({})
+    event_code = settings.get("event_code") if settings else None
+
+    if not event_code:
+        return {"checkins": [], "event_code": None}
+
+    checked_in_map = {}
+    async for c in db.checkins.find({"event_code": event_code}):
+        checked_in_map[c["team_code"]] = c
+
     query = {}
     if search:
         safe = re.escape(search.strip())
-        team = await db.teams.find_one({"team_code": {"$regex": safe, "$options": "i"}})
-        if team:
-            query["team_code"] = team["team_code"]
-        else:
-            team = await db.teams.find_one({"team_name": {"$regex": safe, "$options": "i"}})
-            if team:
-                query["team_code"] = team["team_code"]
-            else:
-                return {"checkins": []}
+        query["$or"] = [
+            {"team_code": {"$regex": safe, "$options": "i"}},
+            {"team_name": {"$regex": safe, "$options": "i"}},
+        ]
 
-    checkins = []
-    async for c in db.checkins.find(query):
-        c["_id"] = str(c["_id"])
-        team = await db.teams.find_one({"team_code": c["team_code"]})
-        c["team_name"] = team["team_name"] if team else ""
-        c["bin_number"] = team.get("bin_number", "") if team else ""
-        checkins.append(c)
-    return {"checkins": checkins}
+    teams = []
+    async for t in db.teams.find(query).sort("team_code", 1):
+        tc = t["team_code"]
+        ci = checked_in_map.get(tc)
+        participants = []
+        async for p in db.participants.find({"team_code": tc}):
+            participants.append({"name": p.get("name", ""), "email": p.get("email", "")})
+        alloc = await db.allocations.find_one({"team_code": tc})
+        teams.append({
+            "team_code": tc,
+            "team_name": t.get("team_name", ""),
+            "team_status": t.get("status", "ACTIVE"),
+            "bin_number": t.get("bin_number", ""),
+            "participants": participants,
+            "challenge_code": alloc.get("challenge_code", "") if alloc else "",
+            "checked_in": ci is not None and ci.get("checked_in", False),
+            "checked_in_at": ci.get("checked_in_at").isoformat() if ci and ci.get("checked_in_at") else None,
+            "checked_in_by": ci.get("checked_in_by") if ci else None,
+        })
+
+    return {"checkins": teams, "event_code": event_code}
 
 
 # ─────────────────────────────────────────────
@@ -1328,8 +1367,7 @@ async def get_dashboard(admin=Depends(get_admin_user)):
     total_participants = await db.participants.count_documents({})
     total_challenges = await db.challenges.count_documents({})
     ready_challenges = await db.challenges.count_documents({"status": "READY"})
-    checked_in = await db.checkins.count_documents({"status": {"$in": ["CHECKED-IN", "STARTED", "COMPLETED"]}})
-    completed = await db.checkins.count_documents({"status": "COMPLETED"})
+    checked_in = await db.checkins.count_documents({"event_code": settings.get("event_code") if settings else None, "checked_in": True}) if settings and settings.get("event_code") else 0
 
     event_settings = await db.event_settings.find_one({})
     event_status = compute_event_status(event_settings) if event_settings else "DRAFT"
@@ -1349,7 +1387,6 @@ async def get_dashboard(admin=Depends(get_admin_user)):
 
     total_submissions = await db.submissions.count_documents({})
     evaluated_submissions = await db.submissions.count_documents({"status": "evaluated"})
-    notifications_count = await db.notifications.count_documents({})
 
     alloc_state = "PENDING"
     if event_settings:
@@ -1367,7 +1404,6 @@ async def get_dashboard(admin=Depends(get_admin_user)):
         "challenge_distribution": challenge_distribution,
         "total_submissions": total_submissions,
         "evaluated_submissions": evaluated_submissions,
-        "notifications_count": notifications_count,
         "allocated_teams": allocated_teams,
         "released_allocations": released_allocations,
         "allocation_state": alloc_state,

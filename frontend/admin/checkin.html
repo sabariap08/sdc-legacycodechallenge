@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Check-In - Legacy Code Rescue</title>
+    <link rel="stylesheet" href="/static/css/styles.css">
+    <style>
+        .checkin-header { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:20px; }
+        .event-badge { display:inline-flex; align-items:center; gap:6px; padding:6px 14px; background:var(--bg-input); border:1px solid var(--border); border-radius:var(--radius-full); font-family:var(--font-mono); font-size:13px; font-weight:600; color:var(--primary); }
+        .search-wrap { position:relative; max-width:360px; flex:1; }
+        .search-wrap input { padding-left:36px; }
+        .search-wrap .search-icon { position:absolute; left:12px; top:50%; transform:translateY(-50%); color:var(--text-muted); pointer-events:none; display:flex; }
+        .checkin-status { display:inline-flex; align-items:center; gap:5px; padding:4px 12px; border-radius:var(--radius-full); font-size:12px; font-weight:600; }
+        .checkin-status.checked { background:var(--success-bg, rgba(34,197,94,0.1)); color:var(--success); border:1px solid var(--success-border, rgba(34,197,94,0.3)); }
+        .checkin-status.not-checked { background:var(--bg-hover); color:var(--text-muted); border:1px solid var(--border); }
+        .checkin-btn { padding:6px 14px; font-size:12px; border-radius:var(--radius-sm); cursor:pointer; border:1px solid; font-weight:600; display:inline-flex; align-items:center; gap:5px; transition:var(--transition); }
+        .checkin-btn.do-checkin { background:var(--success); color:#fff; border-color:var(--success); }
+        .checkin-btn.do-checkin:hover { filter:brightness(0.9); }
+        .checkin-btn.undo-checkin { background:transparent; color:var(--text-muted); border-color:var(--border); }
+        .checkin-btn.undo-checkin:hover { border-color:var(--danger); color:var(--danger); }
+        .checkin-btn:disabled { opacity:0.5; cursor:not-allowed; }
+        .members-cell { font-size:12px; color:var(--text-secondary); line-height:1.5; max-width:260px; }
+        .members-cell .member-name { font-weight:500; color:var(--text-primary); }
+        .members-cell .member-email { color:var(--text-muted); font-size:11px; }
+        .stats-bar { display:flex; gap:16px; margin-bottom:20px; flex-wrap:wrap; }
+        .stat-pill { display:flex; align-items:center; gap:8px; padding:8px 16px; background:var(--bg-card); border:1px solid var(--border); border-radius:var(--radius-md); }
+        .stat-pill .stat-num { font-size:20px; font-weight:700; color:var(--primary); font-family:var(--font-mono); }
+        .stat-pill .stat-lbl { font-size:11px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px; }
+        @media (max-width:768px) {
+            .checkin-card-mobile { display:block !important; }
+            .checkin-table-wrap { display:none !important; }
+        }
+        .checkin-card-mobile { display:none; background:var(--bg-card); border:1px solid var(--border); border-radius:var(--radius-md); padding:16px; margin-bottom:12px; }
+        .checkin-card-mobile .card-row { display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-bottom:1px solid var(--border); }
+        .checkin-card-mobile .card-row:last-child { border-bottom:none; }
+        .checkin-card-mobile .card-label { font-size:11px; font-weight:600; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px; }
+        .checkin-card-mobile .card-value { font-size:13px; color:var(--text-primary); font-weight:500; }
+    </style>
+</head>
+<body>
+    <script src="/static/js/api.js"></script>
+    <script>
+        if (!API.isLoggedIn() || API.role !== 'admin') { window.location.href = '/login'; }
+        function logout() { API.clearAuth(); window.location.href = '/login'; }
+        document.body.innerHTML = renderAdminLayout('checkin', 'Check-In');
+        initTheme();
+        document.getElementById('pageContent').innerHTML = `
+            <div class="page-header with-actions">
+                <div>
+                    <h1>Check-In</h1>
+                    <p>Manage team check-in for the current event</p>
+                </div>
+                <div style="display:flex;gap:8px;align-items:center;">
+                    <span class="event-badge" id="eventBadge">Loading...</span>
+                    <button class="btn btn-ghost btn-sm" onclick="loadCheckins()">${ICONS.refresh} Refresh</button>
+                </div>
+            </div>
+            <div id="error-msg" class="error-message"></div>
+            <div id="success-msg" class="success-message"></div>
+
+            <div class="stats-bar" id="statsBar">
+                <div class="stat-pill"><span class="stat-num" id="statTotal">-</span><span class="stat-lbl">Total Teams</span></div>
+                <div class="stat-pill"><span class="stat-num" id="statChecked">-</span><span class="stat-lbl">Checked In</span></div>
+                <div class="stat-pill"><span class="stat-num" id="statPending">-</span><span class="stat-lbl">Pending</span></div>
+            </div>
+
+            <div class="search-wrap" style="margin-bottom:16px;">
+                <span class="search-icon">${ICONS.search}</span>
+                <input type="text" id="searchInput" placeholder="Search teams, members, challenges..." oninput="filterTeams()">
+            </div>
+
+            <div id="contentArea">
+                <div class="flex-center" style="padding:48px;"><span class="loading-spinner"></span></div>
+            </div>
+        `;
+
+        let allTeams = [];
+        let currentEventCode = '';
+
+        async function loadCheckins() {
+            hideError('error-msg'); hideSuccess('success-msg');
+            document.getElementById('contentArea').innerHTML = '<div class="flex-center" style="padding:48px;"><span class="loading-spinner"></span></div>';
+            try {
+                const resp = await API.get('/api/admin/checkin');
+                if (!resp) return;
+                const data = await resp.json();
+                allTeams = data.checkins || [];
+                currentEventCode = data.event_code || '';
+                document.getElementById('eventBadge').textContent = currentEventCode ? 'Event: ' + currentEventCode : 'No Event';
+                updateStats();
+                renderTable(allTeams);
+            } catch (e) {
+                document.getElementById('contentArea').innerHTML = '<p class="text-muted" style="font-size:13px;">Failed to load check-in data</p>';
+            }
+        }
+
+        function updateStats() {
+            const total = allTeams.length;
+            const checked = allTeams.filter(t => t.checked_in).length;
+            document.getElementById('statTotal').textContent = total;
+            document.getElementById('statChecked').textContent = checked;
+            document.getElementById('statPending').textContent = total - checked;
+        }
+
+        function filterTeams() {
+            const q = document.getElementById('searchInput').value.toLowerCase().trim();
+            if (!q) { renderTable(allTeams); return; }
+            const filtered = allTeams.filter(t => {
+                const hay = [
+                    t.team_code, t.team_name, t.challenge_code,
+                    ...(t.participants || []).map(p => p.name + ' ' + p.email)
+                ].join(' ').toLowerCase();
+                return hay.includes(q);
+            });
+            renderTable(filtered);
+        }
+
+        function renderTable(teams) {
+            const el = document.getElementById('contentArea');
+            if (!teams || teams.length === 0) {
+                el.innerHTML = '<div class="empty-state"><div class="empty-icon">' + ICONS.inbox + '</div><h3>No Teams Found</h3><p>Create teams to begin check-in management.</p></div>';
+                return;
+            }
+
+            let html = '<div class="card"><div class="table-container checkin-table-wrap"><table><thead><tr>';
+            html += '<th>Team Code</th><th>Team Name</th><th>Members</th><th>Challenge</th><th>Status</th><th>Actions</th>';
+            html += '</tr></thead><tbody>';
+            for (const t of teams) {
+                const statusClass = t.checked_in ? 'checked' : 'not-checked';
+                const statusText = t.checked_in ? ICONS.check + ' Checked In' : ICONS.x + ' Not Checked In';
+                const membersHtml = (t.participants || []).map(p =>
+                    '<div><span class="member-name">' + escapeHtml(p.name) + '</span> <span class="member-email">' + escapeHtml(p.email) + '</span></div>'
+                ).join('');
+                const challengeText = t.challenge_code || '<span class="text-muted">-</span>';
+                const btnHtml = t.checked_in
+                    ? '<button class="checkin-btn undo-checkin" onclick="removeCheckin(\'' + t.team_code + '\')">' + ICONS.x + ' Undo</button>'
+                    : '<button class="checkin-btn do-checkin" onclick="doCheckin(\'' + t.team_code + '\')">' + ICONS.check + ' Check-In</button>';
+
+                html += '<tr>';
+                html += '<td><strong>' + escapeHtml(t.team_code) + '</strong></td>';
+                html += '<td>' + escapeHtml(t.team_name) + '</td>';
+                html += '<td class="members-cell">' + (membersHtml || '<span class="text-muted">-</span>') + '</td>';
+                html += '<td>' + challengeText + '</td>';
+                html += '<td><span class="checkin-status ' + statusClass + '">' + statusText + '</span></td>';
+                html += '<td>' + btnHtml + '</td>';
+                html += '</tr>';
+            }
+            html += '</tbody></table></div></div>';
+
+            let cardsHtml = '';
+            for (const t of teams) {
+                const statusClass = t.checked_in ? 'checked' : 'not-checked';
+                const statusText = t.checked_in ? 'Checked In' : 'Not Checked In';
+                const membersText = (t.participants || []).map(p => p.name).join(', ') || '-';
+                const btnHtml = t.checked_in
+                    ? '<button class="checkin-btn undo-checkin" onclick="removeCheckin(\'' + t.team_code + '\')">' + ICONS.x + ' Undo</button>'
+                    : '<button class="checkin-btn do-checkin" onclick="doCheckin(\'' + t.team_code + '\')">' + ICONS.check + ' Check-In</button>';
+
+                cardsHtml += '<div class="checkin-card-mobile">';
+                cardsHtml += '<div class="card-row"><span class="card-label">Team</span><span class="card-value"><strong>' + escapeHtml(t.team_code) + '</strong> ' + escapeHtml(t.team_name) + '</span></div>';
+                cardsHtml += '<div class="card-row"><span class="card-label">Members</span><span class="card-value">' + escapeHtml(membersText) + '</span></div>';
+                cardsHtml += '<div class="card-row"><span class="card-label">Challenge</span><span class="card-value">' + (t.challenge_code || '-') + '</span></div>';
+                cardsHtml += '<div class="card-row"><span class="card-label">Status</span><span class="checkin-status ' + statusClass + '">' + statusText + '</span></div>';
+                cardsHtml += '<div class="card-row"><span class="card-label">Action</span>' + btnHtml + '</div>';
+                cardsHtml += '</div>';
+            }
+
+            el.innerHTML = html + cardsHtml;
+        }
+
+        async function doCheckin(teamCode) {
+            hideError('error-msg'); hideSuccess('success-msg');
+            try {
+                const resp = await API.post('/api/admin/checkin', { team_code: teamCode });
+                if (!resp) return;
+                const data = await resp.json();
+                if (resp.ok) {
+                    showSuccess('success-msg', escapeHtml(teamCode) + ' checked in successfully');
+                    loadCheckins();
+                } else {
+                    showError('error-msg', data.detail || 'Check-in failed');
+                }
+            } catch (e) { showError('error-msg', e.message); }
+        }
+
+        async function removeCheckin(teamCode) {
+            hideError('error-msg'); hideSuccess('success-msg');
+            try {
+                const resp = await API.del('/api/admin/checkin/' + teamCode);
+                if (!resp) return;
+                const data = await resp.json();
+                if (resp.ok) {
+                    showSuccess('success-msg', escapeHtml(teamCode) + ' check-in removed');
+                    loadCheckins();
+                } else {
+                    showError('error-msg', data.detail || 'Failed to remove check-in');
+                }
+            } catch (e) { showError('error-msg', e.message); }
+        }
+
+        loadCheckins();
+    </script>
+</body>
+</html>

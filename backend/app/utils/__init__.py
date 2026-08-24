@@ -9,10 +9,6 @@ def generate_team_code() -> str:
     return f"BUG-{code}"
 
 
-def generate_challenge_code(index: int) -> str:
-    return f"CH-{index:02d}"
-
-
 def generate_bin_number(index: int) -> str:
     return f"BIN-{index:02d}"
 

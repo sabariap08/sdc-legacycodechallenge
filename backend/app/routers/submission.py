@@ -1,5 +1,4 @@
 import os
-import shutil
 import subprocess
 from fastapi import APIRouter, Depends, HTTPException
 from app.database import get_db

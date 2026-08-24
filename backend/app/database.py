@@ -17,16 +17,6 @@ def is_db_available() -> bool:
     return _db_available and db is not None
 
 
-def _build_tls_context():
-    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-    ctx.load_verify_locations(certifi.where())
-    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
-    ctx.maximum_version = ssl.TLSVersion.TLSv1_3
-    ctx.check_hostname = True
-    ctx.verify_mode = ssl.CERT_REQUIRED
-    return ctx
-
-
 def _make_client():
     return AsyncIOMotorClient(
         MONGODB_URI,
@@ -125,12 +115,12 @@ async def _create_indexes():
     await db.challenges.create_index("challenge_code", unique=True)
     await db.allocations.create_index("team_code", unique=True)
     await db.allocations.create_index("challenge_code")
-    await db.workspaces.create_index(["team_code", "challenge_code"], unique=True)
     await db.submissions.create_index("team_code")
+    await db.submissions.create_index("challenge_code")
     await db.admins.create_index("username", unique=True)
     await db.audit_logs.create_index("timestamp")
-    await db.checkins.create_index("team_code", unique=True)
-    await db.notifications.create_index("team_code")
+    await db.checkins.create_index(["team_code", "event_code"], unique=True)
+    await db.checkins.create_index("event_code")
     await db.announcements.create_index("created_at")
     await db.blocked_users.create_index("email", unique=True)
     await db.event_settings.create_index("event_code", sparse=True)
@@ -141,13 +131,15 @@ async def _create_indexes():
 async def _ensure_event_settings():
     existing = await db.event_settings.find_one({})
     if not existing:
+        from app.utils import generate_event_code
+        from datetime import datetime as _dt
         await db.event_settings.insert_one({
-            "event_code": __import__("app.utils", fromlist=["generate_event_code"]).generate_event_code(),
+            "event_code": generate_event_code(),
             "status": "DRAFT",
             "event_start_time": None,
             "event_end_time": None,
             "event_duration_minutes": 300,
             "leaderboard_enabled": False,
-            "created_at": __import__("datetime").datetime.utcnow(),
-            "updated_at": __import__("datetime").datetime.utcnow(),
+            "created_at": _dt.utcnow(),
+            "updated_at": _dt.utcnow(),
         })

@@ -13,15 +13,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, RedirectResponse
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import Response
 from pydantic import BaseModel
 from datetime import datetime
 from app.database import connect_db, close_db, is_db_available
 from app.config import CHALLENGE_STORAGE_PATH, TEAM_WORKSPACE_PATH, EVALUATOR_PATH
 from app.security import hash_password, verify_password, create_token
 from app.database import get_db
-
-APP_VERSION = "2.0.0"
 
 app = FastAPI(title="Legacy Code Rescue Portal")
 
@@ -98,6 +95,18 @@ async def unified_login(body: LoginRequest):
 
             auth_record = await db.team_auth.find_one({"team_code": team_code})
             if auth_record and verify_password(password, auth_record["password_hash"]):
+                from app.utils import compute_event_status
+                settings = await db.event_settings.find_one({})
+                computed = compute_event_status(settings) if settings else "DRAFT"
+                if computed == "ONGOING":
+                    event_code = settings.get("event_code") if settings else None
+                    if event_code:
+                        checkin = await db.checkins.find_one({"team_code": team_code, "event_code": event_code, "checked_in": True})
+                        if not checkin:
+                            raise HTTPException(
+                                status_code=403,
+                                detail="Your team has not been checked in for the current event yet. Please wait for the event administrator to complete your check-in."
+                            )
                 token = create_token({
                     "sub": team_code,
                     "role": "participant",
@@ -172,6 +181,11 @@ async def admin_event_page():
 @app.get("/admin/history")
 async def admin_history_page():
     return FileResponse(os.path.join(frontend_path, "admin", "history.html"))
+
+
+@app.get("/admin/checkin")
+async def admin_checkin_page():
+    return FileResponse(os.path.join(frontend_path, "admin", "checkin.html"))
 
 
 @app.get("/admin/audit")

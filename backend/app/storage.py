@@ -3,7 +3,6 @@ import logging
 import gridfs
 from motor.motor_asyncio import AsyncIOMotorGridFSBucket
 from app.database import get_db, is_db_available
-from app.config import CHALLENGE_STORAGE_PATH
 
 logger = logging.getLogger(__name__)
 

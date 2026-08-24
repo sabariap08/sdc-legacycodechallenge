@@ -147,7 +147,7 @@
     <script src="/static/js/api.js"></script>
     <script>
         if (!API.isLoggedIn() || API.role !== 'participant') { window.location.href = '/login'; }
-        function logout() { API.clearAuth(); try { localStorage.removeItem('tc_accepted'); } catch(e) {} window.location.href = '/login'; }
+        function logout() { API.clearAuth(); window.location.href = '/login'; }
 
         let serverTimeOffset = 0;
         async function syncServerTime() {
@@ -259,23 +259,48 @@
         }
 
         /* ==================== ONGOING DASHBOARD ==================== */
-        function hasAcceptedTC() {
-            try { return localStorage.getItem('tc_accepted') === 'true'; } catch(e) { return false; }
+        let tcAccepted = false;
+
+        async function checkTCStatus() {
+            try {
+                const resp = await API.get('/api/participant/tc-status');
+                if (resp) {
+                    const data = await resp.json();
+                    tcAccepted = data.accepted === true;
+                }
+            } catch(e) { tcAccepted = false; }
         }
-        function acceptTC() {
-            try { localStorage.setItem('tc_accepted', 'true'); } catch(e) {}
-            API.post('/api/participant/accept-tc', {}).catch(() => {});
-            const modal = document.getElementById('tcModal');
-            if (modal) modal.style.display = 'none';
-            const ideBtn = document.getElementById('openIdeBtn');
-            if (ideBtn) { ideBtn.disabled = false; ideBtn.onclick = function() { window.location.href = '/participant/ide'; }; }
+
+        async function acceptTC() {
+            const btn = event.target;
+            btn.disabled = true;
+            btn.textContent = 'Accepting...';
+            try {
+                const resp = await API.post('/api/participant/accept-tc', {});
+                if (resp && resp.ok) {
+                    tcAccepted = true;
+                    hideTCModal();
+                    const ideBtn = document.getElementById('openIdeBtn');
+                    if (ideBtn) { ideBtn.disabled = false; }
+                } else {
+                    btn.disabled = false;
+                    btn.textContent = 'Accept & Continue';
+                }
+            } catch(e) {
+                btn.disabled = false;
+                btn.textContent = 'Accept & Continue';
+            }
         }
         function showTCModal() {
             const modal = document.getElementById('tcModal');
-            if (modal) modal.style.display = 'flex';
+            if (modal) modal.classList.add('active');
+        }
+        function hideTCModal() {
+            const modal = document.getElementById('tcModal');
+            if (modal) modal.classList.remove('active');
         }
         function handleOpenIDE() {
-            if (hasAcceptedTC()) {
+            if (tcAccepted) {
                 window.location.href = '/participant/ide';
             } else {
                 showTCModal();
@@ -331,9 +356,9 @@
                     </div>
                 </div>
 
-                <div id="tcModal" style="position:fixed;inset:0;background:var(--bg-overlay);z-index:2000;display:none;align-items:center;justify-content:center;padding:16px;">
-                    <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-md);padding:28px;max-width:560px;width:100%;max-height:85vh;overflow-y:auto;box-shadow:var(--shadow-xl);">
-                        <h2 style="font-size:20px;font-weight:700;margin-bottom:16px;color:var(--text-primary);">Terms & Conditions</h2>
+                <div id="tcModal" class="modal-overlay">
+                    <div class="modal" style="max-width:560px;max-height:85vh;overflow-y:auto;">
+                        <div class="modal-header"><h2 style="font-size:20px;">Terms & Conditions</h2></div>
                         <div style="font-size:13px;color:var(--text-secondary);line-height:1.7;margin-bottom:20px;">
                             <p style="margin-bottom:12px;">By proceeding to the IDE, you agree to the following:</p>
                             <ol style="padding-left:20px;margin-bottom:12px;">
@@ -345,9 +370,9 @@
                             </ol>
                             <p style="font-size:12px;color:var(--text-muted);">Failure to comply with these terms may result in immediate disqualification from the event.</p>
                         </div>
-                        <div style="display:flex;gap:8px;justify-content:flex-end;">
+                        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;">
                             <button class="btn btn-ghost" onclick="logout()">Decline & Logout</button>
-                            <button class="btn btn-primary" onclick="acceptTC()">Accept & Continue</button>
+                            <button class="btn btn-primary" id="acceptTcBtn" onclick="acceptTC()">Accept & Continue</button>
                         </div>
                     </div>
                 </div>`;
@@ -437,7 +462,7 @@
                     </div>`;
                 const openIdeBtn = document.getElementById('openIdeBtn');
                 if (openIdeBtn) {
-                    if (hasAcceptedTC()) {
+                    if (tcAccepted) {
                         openIdeBtn.disabled = false;
                     } else {
                         openIdeBtn.disabled = true;
@@ -477,8 +502,8 @@
                     renderCompleted(data.team_name, data.team_code, data.submission);
                 } else {
                     renderOngoingDashboard(data);
-                    if (!hasAcceptedTC()) { setTimeout(showTCModal, 500); }
-                    else { try { localStorage.setItem('tc_accepted', 'true'); } catch(e) {} }
+                    await checkTCStatus();
+                    if (!tcAccepted) { setTimeout(showTCModal, 500); }
                 }
             } catch (err) { console.error('Dashboard error:', err); }
         }

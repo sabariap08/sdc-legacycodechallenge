@@ -3,7 +3,6 @@ import shutil
 import logging
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from typing import Optional, List
 from app.database import get_db
 from app.security import get_participant_user
 from app.config import CHALLENGE_STORAGE_PATH, TEAM_WORKSPACE_PATH
@@ -17,17 +16,6 @@ router = APIRouter(prefix="/api/workspace", tags=["workspace"])
 
 def _get_workspace_path(team_code: str, challenge_code: str) -> str:
     return os.path.join(TEAM_WORKSPACE_PATH, team_code, challenge_code)
-
-
-def _init_workspace(team_code: str, challenge_code: str) -> str:
-    workspace = _get_workspace_path(team_code, challenge_code)
-    if not os.path.exists(workspace):
-        source = os.path.join(CHALLENGE_STORAGE_PATH, challenge_code)
-        if os.path.exists(source):
-            shutil.copytree(source, workspace, dirs_exist_ok=True)
-        else:
-            os.makedirs(workspace, exist_ok=True)
-    return workspace
 
 
 async def _init_workspace_async(team_code: str, challenge_code: str) -> str:
