@@ -45,38 +45,10 @@ class NoCacheMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(NoCacheMiddleware)
 
-from app.routers import (
-    admin_auth,
-    admin_teams,
-    admin_challenges,
-    admin_allocation,
-    admin_event,
-    admin_announcements,
-    admin_checkin,
-    admin_leaderboard,
-    admin_audit,
-    admin_dashboard,
-    participant_auth,
-    participant_setup,
-    participant_dashboard,
-    workspace,
-    execution,
-    submission,
-)
+from app.routers import admin, participant, workspace, execution, submission
 
-app.include_router(admin_auth.router)
-app.include_router(admin_teams.router)
-app.include_router(admin_challenges.router)
-app.include_router(admin_allocation.router)
-app.include_router(admin_event.router)
-app.include_router(admin_announcements.router)
-app.include_router(admin_checkin.router)
-app.include_router(admin_leaderboard.router)
-app.include_router(admin_audit.router)
-app.include_router(admin_dashboard.router)
-app.include_router(participant_auth.router)
-app.include_router(participant_setup.router)
-app.include_router(participant_dashboard.router)
+app.include_router(admin.router)
+app.include_router(participant.router)
 app.include_router(workspace.router)
 app.include_router(execution.router)
 app.include_router(submission.router)

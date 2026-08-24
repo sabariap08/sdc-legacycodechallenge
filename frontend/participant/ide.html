@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>IDE - Legacy Code Rescue</title>
     <link rel="stylesheet" href="/static/css/styles.css">
-    <link rel="stylesheet" href="/static/css/ide.css">
+    <link rel="stylesheet" href="/static/css/styles.css">
 </head>
 <body>
     <div class="ide-layout">
@@ -47,15 +47,25 @@
                     </div>
                 </div>
                 <div class="ide-panels">
+                    <div class="ide-stdin-area" id="stdinArea">
+                        <div class="ide-stdin-header">
+                            <span>STDIN</span>
+                            <button class="ide-stdin-toggle" onclick="toggleStdin()" title="Toggle input area">
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
+                            </button>
+                        </div>
+                        <textarea id="stdinInput" class="ide-stdin-textarea" placeholder="Enter input for your program (one value per line for each input() call)..." rows="2"></textarea>
+                    </div>
                     <div class="ide-panel-tabs">
                         <button class="ide-panel-tab active" onclick="switchPanel('terminal', this)">Terminal</button>
                         <button class="ide-panel-tab" onclick="switchPanel('output', this)">Output</button>
                         <button class="ide-panel-tab" onclick="switchPanel('tests', this)">Test Results</button>
                     </div>
                     <div class="ide-panel-content" id="panelContent">
-                        <pre id="terminalOutput" class="ide-terminal">Welcome to Bug Buster IDE Terminal\n</pre>
-                        <pre id="testOutput" class="ide-terminal" style="display:none;"></pre>
-                        <pre id="generalOutput" class="ide-terminal" style="display:none;"></pre>
+                        <div id="terminalOutput" class="ide-terminal">Welcome to Bug Buster IDE Terminal
+</div>
+                        <div id="generalOutput" class="ide-terminal" style="display:none;"></div>
+                        <div id="testOutput" class="ide-terminal" style="display:none;"></div>
                     </div>
                     <div class="ide-panel-actions">
                         <button class="btn btn-sm btn-success" onclick="saveFile()" id="saveBtn">Save</button>

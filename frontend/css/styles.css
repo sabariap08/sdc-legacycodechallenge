@@ -1652,3 +1652,510 @@ table td strong {
         margin-left: 0;
     }
 }
+
+/* ============================================
+   IDE STYLES (merged from ide.css)
+   ============================================ */
+
+.ide-layout {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
+    background: var(--bg-root);
+}
+
+.ide-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 16px;
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--border);
+    min-height: 44px;
+    flex-shrink: 0;
+}
+
+.ide-header-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    min-width: 0;
+}
+
+.ide-logo {
+    font-weight: 700;
+    font-size: 13px;
+    color: var(--primary);
+    white-space: nowrap;
+}
+
+.ide-sep {
+    color: var(--border);
+}
+
+.ide-timer {
+    font-family: var(--font-mono);
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--secondary);
+    background: var(--secondary-bg);
+    padding: 4px 14px;
+    border-radius: var(--radius);
+    border: 1px solid rgba(6, 182, 212, 0.2);
+}
+
+.ide-timer-wrap {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--secondary);
+}
+
+.ide-timer-wrap svg {
+    flex-shrink: 0;
+}
+
+.ide-header-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.ide-hamburger {
+    display: none;
+}
+
+.ide-body {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+    position: relative;
+}
+
+.ide-sidebar {
+    width: 220px;
+    background: var(--bg-sidebar);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    overflow: hidden;
+    transition: width 0.2s ease;
+}
+
+.ide-sidebar-header {
+    padding: 10px 14px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+
+.ide-file-tree {
+    flex: 1;
+    overflow-y: auto;
+    padding: 6px 0;
+}
+
+.ide-file-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 14px;
+    cursor: pointer;
+    font-size: 12px;
+    color: var(--text-secondary);
+    transition: var(--transition);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.ide-file-item:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.ide-file-item.active {
+    background: var(--primary-bg);
+    color: var(--primary);
+}
+
+.ide-file-item.directory {
+    color: var(--text-primary);
+    font-weight: 500;
+}
+
+.ide-file-item .indent {
+    display: inline-block;
+}
+
+.ide-file-item .icon {
+    font-size: 13px;
+    width: 18px;
+    text-align: center;
+    flex-shrink: 0;
+}
+
+.ide-main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    min-width: 0;
+}
+
+.ide-editor-area {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    min-height: 0;
+}
+
+.ide-tabs {
+    display: flex;
+    background: var(--bg-sidebar);
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+    flex-shrink: 0;
+}
+
+.ide-tab {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 14px;
+    font-size: 12px;
+    color: var(--text-muted);
+    cursor: pointer;
+    border-right: 1px solid var(--border);
+    white-space: nowrap;
+    transition: var(--transition);
+}
+
+.ide-tab:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.ide-tab.active {
+    background: var(--bg-card);
+    color: var(--text-primary);
+    border-bottom: 2px solid var(--primary);
+}
+
+.ide-tab .close {
+    font-size: 14px;
+    cursor: pointer;
+    opacity: 0.4;
+    padding: 2px;
+}
+
+.ide-tab .close:hover {
+    opacity: 1;
+    color: var(--danger);
+}
+
+.ide-editor-container {
+    flex: 1;
+    overflow: hidden;
+    min-height: 200px;
+}
+
+.ide-panels {
+    height: 220px;
+    display: flex;
+    flex-direction: column;
+    border-top: 1px solid var(--border);
+    flex-shrink: 0;
+}
+
+.ide-panel-tabs {
+    display: flex;
+    background: var(--bg-sidebar);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+
+.ide-panel-tab {
+    padding: 7px 14px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-muted);
+    cursor: pointer;
+    border: none;
+    background: none;
+    border-bottom: 2px solid transparent;
+    transition: var(--transition);
+    font-family: var(--font-sans);
+}
+
+.ide-panel-tab:hover {
+    color: var(--text-primary);
+    background: var(--bg-hover);
+}
+
+.ide-panel-tab.active {
+    color: var(--primary);
+    border-bottom-color: var(--primary);
+}
+
+.ide-panel-content {
+    flex: 1;
+    overflow-y: auto;
+    background: var(--bg-root);
+}
+
+.ide-terminal {
+    padding: 10px 14px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--text-secondary);
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+
+.ide-panel-actions {
+    display: flex;
+    gap: 6px;
+    padding: 6px 14px;
+    background: var(--bg-sidebar);
+    border-top: 1px solid var(--border);
+    flex-shrink: 0;
+    flex-wrap: wrap;
+}
+
+/* --- STDIN INPUT AREA --- */
+.ide-stdin-area {
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+
+.ide-stdin-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 14px;
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    background: var(--bg-sidebar);
+}
+
+.ide-stdin-toggle {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 2px;
+    display: flex;
+    align-items: center;
+    transition: var(--transition);
+}
+
+.ide-stdin-toggle:hover {
+    color: var(--text-primary);
+}
+
+.ide-stdin-textarea {
+    width: 100%;
+    padding: 6px 14px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.5;
+    background: var(--bg-root);
+    color: var(--text-primary);
+    border: none;
+    resize: vertical;
+    min-height: 36px;
+    max-height: 120px;
+    outline: none;
+}
+
+.ide-stdin-textarea::placeholder {
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+.ide-stdin-area.collapsed .ide-stdin-textarea {
+    display: none;
+}
+
+.ide-stdin-area.collapsed .ide-stdin-toggle svg {
+    transform: rotate(-90deg);
+}
+
+/* --- EXECUTION OUTPUT FORMATTING --- */
+.exec-status {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 6px;
+    font-family: var(--font-sans);
+}
+
+.exec-status.success { background: var(--success-bg); color: var(--success); }
+.exec-status.error { background: var(--danger-bg); color: var(--danger); }
+.exec-status.warning { background: var(--warning-bg); color: var(--warning); }
+.exec-status.info { background: var(--primary-bg); color: var(--primary); }
+
+.ide-output-section {
+    margin-bottom: 6px;
+}
+
+.ide-output-label {
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 2px;
+}
+
+.ide-output-content {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+
+.ide-output-divider {
+    height: 1px;
+    background: var(--border);
+    margin: 6px 0;
+}
+
+.ide-output-meta {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+.ide-test-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin-bottom: 3px;
+    font-size: 12px;
+}
+
+.ide-test-icon {
+    font-weight: 700;
+    font-family: var(--font-mono);
+    min-width: 16px;
+    flex-shrink: 0;
+}
+
+.ide-test-name {
+    color: var(--text-primary);
+    font-weight: 500;
+}
+
+.ide-test-time {
+    color: var(--text-muted);
+    font-size: 11px;
+    margin-left: auto;
+    flex-shrink: 0;
+}
+
+.ide-test-reason {
+    margin-left: 24px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-bottom: 3px;
+}
+
+.status-saved {
+    color: var(--success) !important;
+}
+
+.status-modified {
+    color: var(--warning) !important;
+}
+
+/* --- IDE RESPONSIVE --- */
+@media (max-width: 768px) {
+    .ide-hamburger {
+        display: flex;
+    }
+
+    .ide-sidebar {
+        position: fixed;
+        top: 44px;
+        left: 0;
+        bottom: 0;
+        width: 240px;
+        z-index: 90;
+        transform: translateX(-100%);
+        transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        box-shadow: none;
+    }
+
+    .ide-sidebar.open {
+        transform: translateX(0);
+        box-shadow: var(--shadow-xl);
+    }
+
+    .ide-panels {
+        height: 180px;
+    }
+
+    .ide-panel-actions {
+        padding: 4px 8px;
+        gap: 4px;
+    }
+
+    .ide-panel-actions .btn {
+        padding: 4px 8px;
+        font-size: 11px;
+    }
+
+    .ide-timer {
+        font-size: 12px;
+        padding: 3px 10px;
+    }
+}
+
+@media (max-width: 480px) {
+    .ide-header {
+        padding: 0 8px;
+        min-height: 40px;
+    }
+
+    .ide-logo {
+        font-size: 12px;
+    }
+
+    .ide-header-right .btn {
+        padding: 3px 8px;
+        font-size: 11px;
+    }
+
+    .ide-panels {
+        height: 150px;
+    }
+
+    .ide-panel-tabs {
+        overflow-x: auto;
+    }
+
+    .ide-panel-tab {
+        padding: 5px 10px;
+        font-size: 11px;
+    }
+}

@@ -46,6 +46,7 @@ const API = {
     async get(url) { return this.request(url, { method: 'GET' }); },
     async post(url, data) { return this.request(url, { method: 'POST', body: JSON.stringify(data) }); },
     async put(url, data) { return this.request(url, { method: 'PUT', body: JSON.stringify(data) }); },
+    async patch(url, data) { return this.request(url, { method: 'PATCH', body: JSON.stringify(data) }); },
     async del(url) { return this.request(url, { method: 'DELETE' }); }
 };
 

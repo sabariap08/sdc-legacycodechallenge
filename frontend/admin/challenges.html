@@ -31,7 +31,7 @@
                 <div class="card-header"><h3>Imported Challenges</h3></div>
                 <div id="challengesList"><div class="flex-center" style="padding:24px;"><span class="loading-spinner"></span></div></div>
             </div>
-            <div id="deleteModal" class="modal-overlay" style="display:none;" onclick="closeDeleteModal()">
+            <div id="deleteModal" class="modal-overlay" onclick="closeDeleteModal()">
                 <div class="modal" onclick="event.stopPropagation()">
                     <div class="modal-header"><h3>Delete Repository</h3><button class="modal-close" onclick="closeDeleteModal()">&times;</button></div>
                     <div class="modal-body"><p id="deleteBody">Are you sure?</p></div>
@@ -134,9 +134,9 @@
         function showDeleteModal(code, name) {
             document.getElementById('deleteBody').textContent = 'Delete repository "' + name + '" (' + code + ')? This will permanently remove all files from disk.';
             document.getElementById('deleteConfirmBtn').onclick = () => { closeDeleteModal(); deleteRepo(code); };
-            document.getElementById('deleteModal').style.display = 'flex';
+            document.getElementById('deleteModal').classList.add('active');
         }
-        function closeDeleteModal() { document.getElementById('deleteModal').style.display = 'none'; }
+        function closeDeleteModal() { document.getElementById('deleteModal').classList.remove('active'); }
 
         async function deleteRepo(code) {
             try {

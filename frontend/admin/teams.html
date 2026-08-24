@@ -34,7 +34,7 @@
             </div>
             <div id="teamDetail" style="display:none;"></div>
             <div id="wizardWrap" style="display:none;"></div>
-            <div id="allocModal" class="modal-overlay" style="display:none;" onclick="closeAllocModal()">
+            <div id="allocModal" class="modal-overlay" onclick="closeAllocModal()">
                 <div class="modal" onclick="event.stopPropagation()">
                     <div class="modal-header"><h3 id="allocModalTitle">Confirm</h3><button class="modal-close" onclick="closeAllocModal()">&times;</button></div>
                     <div class="modal-body"><p id="allocModalBody">Are you sure?</p></div>
@@ -50,9 +50,9 @@
             document.getElementById('allocModalTitle').textContent = title;
             document.getElementById('allocModalBody').textContent = body;
             document.getElementById('allocModalConfirm').onclick = () => { closeAllocModal(); onConfirm(); };
-            document.getElementById('allocModal').style.display = 'flex';
+            document.getElementById('allocModal').classList.add('active');
         }
-        function closeAllocModal() { document.getElementById('allocModal').style.display = 'none'; }
+        function closeAllocModal() { document.getElementById('allocModal').classList.remove('active'); }
 
         async function showRandomAlloc() {
             let eventStatus = 'UPCOMING';

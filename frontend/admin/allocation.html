@@ -36,7 +36,7 @@
                 <div id="success-msg" class="success-message"></div>
                 <div id="allocationContent"><div class="flex-center" style="padding:24px;"><span class="loading-spinner"></span></div></div>
             </div>
-            <div id="confirmModal" class="modal-overlay" style="display:none;" onclick="closeModal()">
+            <div id="confirmModal" class="modal-overlay" onclick="closeModal()">
                 <div class="modal" onclick="event.stopPropagation()">
                     <div class="modal-header">
                         <h3 id="modalTitle">Confirm</h3>
@@ -68,11 +68,11 @@
             document.getElementById('modalTitle').textContent = title;
             document.getElementById('modalBody').textContent = body;
             document.getElementById('modalConfirmBtn').onclick = () => { closeModal(); onConfirm(); };
-            document.getElementById('confirmModal').style.display = 'flex';
+            document.getElementById('confirmModal').classList.add('active');
         }
 
         function closeModal() {
-            document.getElementById('confirmModal').style.display = 'none';
+            document.getElementById('confirmModal').classList.remove('active');
         }
 
         async function generateAllocation() {

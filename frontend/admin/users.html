@@ -25,7 +25,7 @@
             </div>
             <div id="error-msg" class="error-message"></div>
             <div id="success-msg" class="success-message"></div>
-            <div id="confirmModal" class="modal-overlay" style="display:none;" onclick="closeConfirm()">
+            <div id="confirmModal" class="modal-overlay" onclick="closeConfirm()">
                 <div class="modal" onclick="event.stopPropagation()">
                     <div class="modal-header"><h3 id="confirmTitle">Confirm</h3><button class="modal-close" onclick="closeConfirm()">&times;</button></div>
                     <div class="modal-body"><p id="confirmBody">Are you sure?</p></div>
@@ -42,9 +42,9 @@
             document.getElementById('confirmTitle').textContent = title;
             document.getElementById('confirmBody').textContent = body;
             document.getElementById('confirmBtn').onclick = () => { closeConfirm(); onConfirm(); };
-            document.getElementById('confirmModal').style.display = 'flex';
+            document.getElementById('confirmModal').classList.add('active');
         }
-        function closeConfirm() { document.getElementById('confirmModal').style.display = 'none'; }
+        function closeConfirm() { document.getElementById('confirmModal').classList.remove('active'); }
 
         let currentTab = 'teams';
         let cachedData = null;

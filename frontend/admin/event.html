@@ -176,14 +176,14 @@
             const btns = document.querySelectorAll('#startMultiToggle .toggle-btn');
             btns.forEach(b => { b.classList.remove('active', 'yes-active', 'no-active'); });
             btn.classList.add('active');
-            btn.classList.add(val ? 'yes-active' : 'no-events');
+            btn.classList.add(val ? 'yes-active' : 'no-active');
         }
         function setTimingMulti(val, btn) {
             document.getElementById('timingMultiSubmissions').value = val ? 'true' : 'false';
             const btns = document.querySelectorAll('#timingMultiToggle .toggle-btn');
-            btns.forEach(b => { b.classList.remove('active', 'yes-active', 'no-events'); });
+            btns.forEach(b => { b.classList.remove('active', 'yes-active', 'no-active'); });
             btn.classList.add('active');
-            btn.classList.add(val ? 'yes-active' : 'no-events');
+            btn.classList.add(val ? 'yes-active' : 'no-active');
         }
 
         function showStartModal() { document.getElementById('startModal').classList.add('active'); }
@@ -202,9 +202,9 @@
                 const multi = currentEvent.allow_multiple_submissions || false;
                 document.getElementById('timingMultiSubmissions').value = multi ? 'true' : 'false';
                 const btns = document.querySelectorAll('#timingMultiToggle .toggle-btn');
-                btns.forEach(b => { b.classList.remove('active', 'yes-active', 'no-events'); });
+                btns.forEach(b => { b.classList.remove('active', 'yes-active', 'no-active'); });
                 if (multi) { btns[0].classList.add('active', 'yes-active'); }
-                else { btns[1].classList.add('active', 'no-events'); }
+                else { btns[1].classList.add('active', 'no-active'); }
             }
             document.getElementById('timingModal').classList.add('active');
         }
@@ -330,12 +330,14 @@
                 const configBtn = document.getElementById('configBtn');
                 if (data.computed_status === 'ONGOING' || data.computed_status === 'COMPLETED') {
                     startBtn.disabled = true;
-                    startBtn.textContent = 'Event Active';
+                    startBtn.innerHTML = ICONS.play + ' Event Active';
                     configBtn.disabled = true;
-                    configBtn.textContent = 'Locked';
+                    configBtn.innerHTML = ICONS.clock + ' Locked';
                 } else {
                     startBtn.disabled = false;
+                    startBtn.innerHTML = ICONS.play + ' Start Event';
                     configBtn.disabled = false;
+                    configBtn.innerHTML = ICONS.clock + ' Configure Timing';
                 }
 
                 const countdownEl = document.getElementById('countdownDisplay');

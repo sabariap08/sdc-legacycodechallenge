@@ -359,41 +359,177 @@ function switchPanel(panel, el) {
     document.getElementById('testOutput').style.display = panel === 'tests' ? 'block' : 'none';
 }
 
+function toggleStdin() {
+    document.getElementById('stdinArea').classList.toggle('collapsed');
+}
+
 function appendTerminal(text) {
     const el = document.getElementById('terminalOutput');
     el.textContent += text;
     el.scrollTop = el.scrollHeight;
 }
 
-function setOutput(id, text) {
-    const el = document.getElementById(id);
-    el.textContent = text;
+function setOutput(id, html) {
+    document.getElementById(id).innerHTML = html;
+}
+
+function getActiveFilePath() {
+    if (activeFile && openFiles[activeFile]) {
+        return activeFile;
+    }
+    return null;
+}
+
+async function autoSaveIfNeeded() {
+    if (activeFile && openFiles[activeFile] && openFiles[activeFile].modified && editor) {
+        try {
+            await fetch('/api/workspace/file/save', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + API.token },
+                body: JSON.stringify({ path: activeFile, content: editor.getValue() })
+            });
+            openFiles[activeFile].content = editor.getValue();
+            openFiles[activeFile].modified = false;
+            updateTabStatus(activeFile, false);
+        } catch (e) {}
+    }
+}
+
+function formatExecutionResult(data) {
+    var html = '';
+    var statusMap = {
+        success: { cls: 'success', label: 'SUCCESS' },
+        runtime_error: { cls: 'error', label: 'RUNTIME ERROR' },
+        timeout: { cls: 'warning', label: 'TIMEOUT' },
+        error: { cls: 'error', label: 'ERROR' }
+    };
+    var s = statusMap[data.status] || statusMap.error;
+    html += '<div class="exec-status ' + s.cls + '">' + s.label + '</div>';
+
+    if (data.stdout && data.stdout.trim()) {
+        html += '<div class="ide-output-section">';
+        html += '<div class="ide-output-label">Output</div>';
+        html += '<div class="ide-output-content">' + escapeHtml(data.stdout) + '</div>';
+        html += '</div>';
+    }
+    if (data.stderr && data.stderr.trim()) {
+        html += '<div class="ide-output-section">';
+        html += '<div class="ide-output-label">Errors</div>';
+        html += '<div class="ide-output-content" style="color:var(--danger);">' + escapeHtml(data.stderr) + '</div>';
+        html += '</div>';
+    }
+    if (!data.stdout || !data.stdout.trim()) {
+        if (!data.stderr || !data.stderr.trim()) {
+            html += '<div class="ide-output-section">';
+            html += '<div class="ide-output-content" style="color:var(--text-muted);">(No output)</div>';
+            html += '</div>';
+        }
+    }
+
+    html += '<div class="ide-output-divider"></div>';
+    html += '<div class="ide-output-meta">';
+    html += 'Exit Code: ' + data.exit_code;
+    if (data.execution_time !== undefined && data.execution_time !== null) html += ' &middot; Time: ' + data.execution_time + 's';
+    if (data.language) html += ' &middot; ' + data.language;
+    html += '</div>';
+    return html;
+}
+
+function formatTestResult(data) {
+    var html = '';
+
+    if (data.configured === false) {
+        html += '<div class="exec-status info">NOT CONFIGURED</div>';
+        html += '<div class="ide-output-section">';
+        html += '<div class="ide-output-content" style="color:var(--text-muted);">' + escapeHtml(data.message || 'Automated testing is not configured for this challenge.') + '</div>';
+        html += '</div>';
+        return html;
+    }
+
+    if (data.results && data.results.length > 0) {
+        var passed = 0;
+        for (var i = 0; i < data.results.length; i++) { if (data.results[i].passed) passed++; }
+        var total = data.results.length;
+        var allPass = passed === total;
+
+        html += '<div class="exec-status ' + (allPass ? 'success' : 'warning') + '">';
+        html += passed + ' / ' + total + ' TESTS PASSED';
+        html += '</div>';
+
+        html += '<div class="ide-output-section">';
+        for (var j = 0; j < data.results.length; j++) {
+            var r = data.results[j];
+            var icon = r.passed ? '\u2713' : '\u2717';
+            var color = r.passed ? 'var(--success)' : 'var(--danger)';
+            html += '<div class="ide-test-row">';
+            html += '<span class="ide-test-icon" style="color:' + color + ';">' + icon + '</span>';
+            html += '<span class="ide-test-name">' + escapeHtml(r.test) + '</span>';
+            if (r.time) html += '<span class="ide-test-time">' + r.time + 's</span>';
+            html += '</div>';
+            if (!r.passed && r.reason) {
+                html += '<div class="ide-test-reason">' + escapeHtml(r.reason) + '</div>';
+            }
+        }
+        html += '</div>';
+        html += '<div class="ide-output-divider"></div>';
+        html += '<div class="ide-output-meta">' + escapeHtml(data.message || '') + '</div>';
+        return html;
+    }
+
+    if (data.stdout || data.stderr) {
+        var exitCls = data.exit_code === 0 ? 'success' : 'error';
+        var exitLabel = data.exit_code === 0 ? 'ALL TESTS PASSED' : 'TESTS FAILED';
+        html += '<div class="exec-status ' + exitCls + '">' + exitLabel + '</div>';
+        if (data.stdout) {
+            html += '<div class="ide-output-section"><div class="ide-output-content">' + escapeHtml(data.stdout) + '</div></div>';
+        }
+        if (data.stderr) {
+            html += '<div class="ide-output-section"><div class="ide-output-content" style="color:var(--danger);">' + escapeHtml(data.stderr) + '</div></div>';
+        }
+        html += '<div class="ide-output-divider"></div>';
+        html += '<div class="ide-output-meta">Exit Code: ' + data.exit_code;
+        if (data.execution_time) html += ' &middot; Time: ' + data.execution_time + 's';
+        html += '</div>';
+        return html;
+    }
+
+    html += '<div class="exec-status info">NO RESULTS</div>';
+    html += '<div class="ide-output-content" style="color:var(--text-muted);">No test output was produced.</div>';
+    return html;
 }
 
 async function runCode() {
     if (!codeDetails) return;
-    const btn = document.getElementById('runBtn');
+    var btn = document.getElementById('runBtn');
     btn.disabled = true;
-    btn.innerHTML = '<span class="loading-spinner"></span>';
+    btn.innerHTML = '<span class="loading-spinner"></span> Running...';
 
-    appendTerminal('\n$ Running code...\n');
+    await autoSaveIfNeeded();
+
+    var stdin = document.getElementById('stdinInput').value;
+    var filePath = getActiveFilePath();
+
+    switchPanel('output');
+    document.querySelectorAll('.ide-panel-tab').forEach(function(t) { t.classList.remove('active'); });
+    document.querySelectorAll('.ide-panel-tab')[1].classList.add('active');
+    setOutput('generalOutput', '<div class="exec-status info">RUNNING</div><div class="ide-output-content" style="color:var(--text-muted);">Executing program...</div>');
 
     try {
-        const resp = await fetch('/api/execution/run', {
+        var resp = await fetch('/api/execution/run', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': 'Bearer ' + API.token
-            },
-            body: JSON.stringify({})
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + API.token },
+            body: JSON.stringify({ stdin: stdin, file_path: filePath })
         });
-        const data = await resp.json();
-
-        if (data.stdout) appendTerminal(data.stdout);
-        if (data.stderr) appendTerminal('STDERR:\n' + data.stderr);
-        appendTerminal(`\nExit Code: ${data.exit_code}\nCommand: ${data.command}\n`);
+        var data = await resp.json();
+        setOutput('generalOutput', formatExecutionResult(data));
+        appendTerminal('$ run ' + (filePath || 'main') + '\n');
+        if (data.exit_code === 0) {
+            appendTerminal('Process exited with code 0\n');
+        } else {
+            appendTerminal('Process exited with code ' + data.exit_code + '\n');
+        }
     } catch (err) {
-        appendTerminal('Error: ' + err.message + '\n');
+        setOutput('generalOutput', '<div class="exec-status error">ERROR</div><div class="ide-output-content">Unable to execute the program. Please try again.</div>');
     }
 
     btn.disabled = false;
@@ -402,33 +538,25 @@ async function runCode() {
 
 async function runTests() {
     if (!codeDetails) return;
-    const btn = document.getElementById('testBtn');
+    var btn = document.getElementById('testBtn');
     btn.disabled = true;
-    btn.innerHTML = '<span class="loading-spinner"></span>';
+    btn.innerHTML = '<span class="loading-spinner"></span> Testing...';
 
     switchPanel('tests');
-    document.querySelectorAll('.ide-panel-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.ide-panel-tab').forEach(function(t) { t.classList.remove('active'); });
     document.querySelectorAll('.ide-panel-tab')[2].classList.add('active');
-    setOutput('testOutput', 'Running tests...\n');
+    setOutput('testOutput', '<div class="exec-status info">RUNNING TESTS</div><div class="ide-output-content" style="color:var(--text-muted);">Executing tests...</div>');
 
     try {
-        const resp = await fetch('/api/execution/test', {
+        var resp = await fetch('/api/execution/test', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': 'Bearer ' + API.token
-            },
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + API.token },
             body: JSON.stringify({})
         });
-        const data = await resp.json();
-
-        let output = '';
-        if (data.stdout) output += data.stdout;
-        if (data.stderr) output += '\nSTDERR:\n' + data.stderr;
-        output += `\nExit Code: ${data.exit_code}\n`;
-        setOutput('testOutput', output);
+        var data = await resp.json();
+        setOutput('testOutput', formatTestResult(data));
     } catch (err) {
-        setOutput('testOutput', 'Error: ' + err.message);
+        setOutput('testOutput', '<div class="exec-status error">ERROR</div><div class="ide-output-content">Unable to run tests. Please try again.</div>');
     }
 
     btn.disabled = false;
