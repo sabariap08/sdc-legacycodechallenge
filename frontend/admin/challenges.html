@@ -146,33 +146,6 @@
             } catch(e) { alert('Connection error'); }
         }
 
-        async function buildRepo(code) {
-            document.getElementById('deleteBody').textContent = 'Run build pipeline for "' + code + '"?';
-            document.getElementById('deleteModal').querySelector('h3').textContent = 'Build Pipeline';
-            document.getElementById('deleteConfirmBtn').onclick = () => { closeDeleteModal(); doBuild(code); };
-            document.getElementById('deleteModal').style.display = 'flex';
-        }
-
-        async function doBuild(code) {
-            loadChallenges();
-            try {
-                const resp = await API.post('/api/admin/challenges/' + code + '/build', {});
-                if (!resp) return;
-                const data = await resp.json();
-                if (resp.ok) {
-                    let stepsHtml = '';
-                    for (const s of (data.steps || [])) {
-                        const icon = s.status === 'completed' ? ICONS.checkCircle : (s.status === 'failed' ? ICONS.xCircle : ICONS.alertCircle);
-                        const color = s.status === 'completed' ? 'var(--success)' : (s.status === 'failed' ? 'var(--danger)' : 'var(--warning)');
-                        stepsHtml += '<div style="display:flex;align-items:flex-start;gap:8px;padding:6px 0;font-size:13px;"><span style="color:' + color + ';">' + icon + '</span><div><strong>' + escapeHtml(s.name) + '</strong><br><span class="text-muted">' + escapeHtml(s.detail || '') + '</span></div></div>';
-                    }
-                    alert('Build ' + data.status + '\nFiles: ' + (data.file_count || 0) + '\nSteps: ' + (data.steps || []).length);
-                } else {
-                    alert('Build failed: ' + (data.detail || 'Unknown error'));
-                }
-            } catch(e) { alert('Connection error during build'); }
-        }
-
         function viewRepo(code) {
             window.location.href = '/admin/repo-viewer?code=' + encodeURIComponent(code);
         }
@@ -196,7 +169,6 @@
                 html += '<td>' + formatDate(ch.imported_at) + '</td>';
                 html += '<td><div class="flex gap-1">';
                 html += '<button class="btn btn-sm btn-secondary" onclick="viewRepo(\'' + escapeHtml(ch.challenge_code) + '\')">View</button>';
-                html += '<button class="btn btn-sm btn-primary" onclick="buildRepo(\'' + escapeHtml(ch.challenge_code) + '\')">' + ICONS.play + ' Build</button>';
                 html += '<button class="btn btn-sm btn-danger" onclick="showDeleteModal(\'' + escapeHtml(ch.challenge_code) + '\',\'' + escapeHtml(ch.challenge_name || ch.challenge_code) + '\')">Delete</button>';
                 html += '</div></td></tr>';
             }

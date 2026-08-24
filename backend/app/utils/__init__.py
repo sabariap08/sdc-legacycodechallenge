@@ -17,6 +17,12 @@ def generate_bin_number(index: int) -> str:
     return f"BIN-{index:02d}"
 
 
+def generate_event_code() -> str:
+    chars = string.ascii_uppercase + string.digits
+    code = ''.join(secrets.choice(chars) for _ in range(4))
+    return f"EVT-{code}"
+
+
 def sanitize_path(path: str) -> bool:
     forbidden = ["..", "~", "/etc", "/proc", "/sys", "\\", "\x00"]
     for f in forbidden:

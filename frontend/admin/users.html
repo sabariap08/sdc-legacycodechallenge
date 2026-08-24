@@ -135,7 +135,7 @@
 
         async function blockTeamAction(code, name) {
             showConfirm('Block Team', 'Block team "' + name + '"? All members will be prevented from logging in.', async () => {
-                const resp = await API.post('/api/admin/block/team/' + code, {});
+                const resp = await API.post('/api/admin/block', { type: 'team', target: code });
                 if (resp && resp.ok) { cachedData = null; loadData(); }
                 else { const d = resp ? await resp.json() : {}; showError('error-msg', d.detail || 'Failed'); }
             });
@@ -143,7 +143,7 @@
 
         async function unblockTeamAction(code) {
             showConfirm('Unblock Team', 'Unblock team "' + code + '"? Members will be able to log in again.', async () => {
-                const resp = await API.post('/api/admin/unblock/team/' + code, {});
+                const resp = await API.post('/api/admin/unblock', { type: 'team', target: code });
                 if (resp && resp.ok) { cachedData = null; loadData(); }
                 else { const d = resp ? await resp.json() : {}; showError('error-msg', d.detail || 'Failed'); }
             });
@@ -151,7 +151,7 @@
 
         async function blockParticipantAction(email) {
             showConfirm('Block Participant', 'Block "' + email + '"? They will not be able to log in.', async () => {
-                const resp = await API.post('/api/admin/block/participant/' + encodeURIComponent(email), {});
+                const resp = await API.post('/api/admin/block', { type: 'participant', target: email });
                 if (resp && resp.ok) { cachedData = null; loadData(); }
                 else { const d = resp ? await resp.json() : {}; showError('error-msg', d.detail || 'Failed'); }
             });
@@ -159,7 +159,7 @@
 
         async function unblockParticipantAction(email) {
             showConfirm('Unblock Participant', 'Unblock "' + email + '"?', async () => {
-                const resp = await API.post('/api/admin/unblock/participant/' + encodeURIComponent(email), {});
+                const resp = await API.post('/api/admin/unblock', { type: 'participant', target: email });
                 if (resp && resp.ok) { cachedData = null; loadData(); }
                 else { const d = resp ? await resp.json() : {}; showError('error-msg', d.detail || 'Failed'); }
             });

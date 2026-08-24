@@ -133,17 +133,20 @@ async def _create_indexes():
     await db.notifications.create_index("team_code")
     await db.announcements.create_index("created_at")
     await db.blocked_users.create_index("email", unique=True)
+    await db.event_settings.create_index("event_code", sparse=True)
 
 
 async def _ensure_event_settings():
     existing = await db.event_settings.find_one({})
     if not existing:
         await db.event_settings.insert_one({
+            "event_code": __import__("app.utils", fromlist=["generate_event_code"]).generate_event_code(),
             "status": "DRAFT",
             "event_start_time": None,
             "event_end_time": None,
             "event_duration_minutes": 300,
             "leaderboard_enabled": False,
             "allow_multiple_submissions": False,
-            "created_at": __import__("datetime").datetime.utcnow()
+            "created_at": __import__("datetime").datetime.utcnow(),
+            "updated_at": __import__("datetime").datetime.utcnow(),
         })

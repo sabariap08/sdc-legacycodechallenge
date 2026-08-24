@@ -201,98 +201,81 @@ async def list_participants(admin=Depends(get_admin_user)):
     return {"participants": participants}
 
 
-@router.post("/block/team/{team_code}")
-async def block_team(team_code: str, admin=Depends(get_admin_user)):
+@router.post("/block")
+async def block_entity(body: dict, admin=Depends(get_admin_user)):
     db = get_db()
-    team = await db.teams.find_one({"team_code": team_code})
-    if not team:
-        raise HTTPException(status_code=404, detail="Team not found")
-    participants = []
-    async for p in db.participants.find({"team_code": team_code}):
-        participants.append(p)
-    for p in participants:
-        email_lower = p["email"].lower().strip()
-        existing = await db.blocked_users.find_one({"email": email_lower})
-        if not existing:
-            await db.blocked_users.insert_one({
-                "email": email_lower,
-                "team_code": team_code,
-                "blocked_by": admin.get("sub", "admin"),
-                "blocked_at": datetime.utcnow(),
-                "reason": f"Team {team_code} blocked"
-            })
-    await db.teams.update_one({"team_code": team_code}, {"$set": {"status": "BLOCKED"}})
-    logger.info("Team %s blocked by %s (%d participants)", team_code, admin.get("sub", "admin"), len(participants))
-    await db.audit_logs.insert_one({
-        "action": "team_blocked",
-        "actor": admin.get("sub", "admin"),
-        "details": f"Blocked team {team_code} ({len(participants)} participants)",
-        "timestamp": datetime.utcnow()
-    })
-    return {"message": f"Team {team_code} blocked", "blocked_count": len(participants)}
+    entity_type = body.get("type", "")
+    target = body.get("target", "").strip()
+    if entity_type not in ("team", "participant") or not target:
+        raise HTTPException(status_code=400, detail="type must be 'team' or 'participant', target is required")
+
+    if entity_type == "team":
+        team = await db.teams.find_one({"team_code": target})
+        if not team:
+            raise HTTPException(status_code=404, detail="Team not found")
+        blocked = []
+        async for p in db.participants.find({"team_code": target}):
+            email = p["email"].lower().strip()
+            if not await db.blocked_users.find_one({"email": email}):
+                await db.blocked_users.insert_one({
+                    "email": email, "team_code": target,
+                    "blocked_by": admin.get("sub", "admin"),
+                    "blocked_at": datetime.utcnow(), "reason": f"Team {target} blocked"
+                })
+                blocked.append(email)
+        await db.teams.update_one({"team_code": target}, {"$set": {"status": "BLOCKED"}})
+        await db.audit_logs.insert_one({
+            "action": "team_blocked", "actor": admin.get("sub", "admin"),
+            "details": f"Blocked team {target} ({len(blocked)} members)", "timestamp": datetime.utcnow()
+        })
+        return {"message": f"Team {target} blocked", "count": len(blocked)}
+    else:
+        participant = await db.participants.find_one({"email": target.lower()})
+        if not participant:
+            raise HTTPException(status_code=404, detail="Participant not found")
+        if await db.blocked_users.find_one({"email": target.lower()}):
+            raise HTTPException(status_code=400, detail="Already blocked")
+        await db.blocked_users.insert_one({
+            "email": target.lower(), "team_code": participant.get("team_code", ""),
+            "blocked_by": admin.get("sub", "admin"),
+            "blocked_at": datetime.utcnow(), "reason": "Individually blocked"
+        })
+        await db.audit_logs.insert_one({
+            "action": "participant_blocked", "actor": admin.get("sub", "admin"),
+            "details": f"Blocked participant {target}", "timestamp": datetime.utcnow()
+        })
+        return {"message": f"Participant {target} blocked"}
 
 
-@router.post("/unblock/team/{team_code}")
-async def unblock_team(team_code: str, admin=Depends(get_admin_user)):
+@router.post("/unblock")
+async def unblock_entity(body: dict, admin=Depends(get_admin_user)):
     db = get_db()
-    team = await db.teams.find_one({"team_code": team_code})
-    if not team:
-        raise HTTPException(status_code=404, detail="Team not found")
-    participants = []
-    async for p in db.participants.find({"team_code": team_code}):
-        participants.append(p)
-    for p in participants:
-        email_lower = p["email"].lower().strip()
-        await db.blocked_users.delete_one({"email": email_lower})
-    await db.teams.update_one({"team_code": team_code}, {"$set": {"status": "REGISTERED"}})
-    logger.info("Team %s unblocked by %s", team_code, admin.get("sub", "admin"))
-    await db.audit_logs.insert_one({
-        "action": "team_unblocked",
-        "actor": admin.get("sub", "admin"),
-        "details": f"Unblocked team {team_code}",
-        "timestamp": datetime.utcnow()
-    })
-    return {"message": f"Team {team_code} unblocked"}
+    entity_type = body.get("type", "")
+    target = body.get("target", "").strip()
+    if entity_type not in ("team", "participant") or not target:
+        raise HTTPException(status_code=400, detail="type must be 'team' or 'participant', target is required")
 
-
-@router.post("/block/participant/{email}")
-async def block_participant(email: str, admin=Depends(get_admin_user)):
-    db = get_db()
-    participant = await db.participants.find_one({"email": email.lower()})
-    if not participant:
-        raise HTTPException(status_code=404, detail="Participant not found")
-    existing = await db.blocked_users.find_one({"email": email.lower()})
-    if existing:
-        raise HTTPException(status_code=400, detail="Participant already blocked")
-    await db.blocked_users.insert_one({
-        "email": email.lower(),
-        "team_code": participant.get("team_code", ""),
-        "blocked_by": admin.get("sub", "admin"),
-        "blocked_at": datetime.utcnow(),
-        "reason": "Individually blocked"
-    })
-    await db.audit_logs.insert_one({
-        "action": "participant_blocked",
-        "actor": admin.get("sub", "admin"),
-        "details": f"Blocked participant {email}",
-        "timestamp": datetime.utcnow()
-    })
-    return {"message": f"Participant {email} blocked"}
-
-
-@router.post("/unblock/participant/{email}")
-async def unblock_participant(email: str, admin=Depends(get_admin_user)):
-    db = get_db()
-    result = await db.blocked_users.delete_one({"email": email.lower()})
-    if result.deleted_count == 0:
-        raise HTTPException(status_code=404, detail="Blocked record not found")
-    await db.audit_logs.insert_one({
-        "action": "participant_unblocked",
-        "actor": admin.get("sub", "admin"),
-        "details": f"Unblocked participant {email}",
-        "timestamp": datetime.utcnow()
-    })
-    return {"message": f"Participant {email} unblocked"}
+    if entity_type == "team":
+        team = await db.teams.find_one({"team_code": target})
+        if not team:
+            raise HTTPException(status_code=404, detail="Team not found")
+        async for p in db.participants.find({"team_code": target}):
+            await db.blocked_users.delete_one({"email": p["email"].lower().strip()})
+        await db.teams.update_one({"team_code": target}, {"$set": {"status": "REGISTERED"}})
+        await db.audit_logs.insert_one({
+            "action": "team_unblocked", "actor": admin.get("sub", "admin"),
+            "details": f"Unblocked team {target}", "timestamp": datetime.utcnow()
+        })
+        return {"message": f"Team {target} unblocked"}
+    else:
+        result = await db.blocked_users.delete_one({"email": target.lower()})
+        if result.deleted_count == 0:
+            raise HTTPException(status_code=404, detail="Blocked record not found")
+        await db.audit_logs.insert_one({
+            "action": "participant_unblocked", "actor": admin.get("sub", "admin"),
+            "details": f"Unblocked participant {target}", "timestamp": datetime.utcnow()
+        })
+        return {"message": f"Participant {target} unblocked"}
 
 
 @router.get("/user-management")

@@ -240,7 +240,7 @@
 
         async function blockTeam(code, name) {
             showAllocModal('Block Team', 'Block team "' + name + '"? All members will be prevented from logging in.', async () => {
-                const resp = await API.post('/api/admin/block/team/' + code, {});
+                const resp = await API.post('/api/admin/block', { type: 'team', target: code });
                 if (resp && resp.ok) { loadTeams(); }
                 else { const d = resp ? await resp.json() : {}; showError('error-msg', d.detail || 'Failed'); }
             });
@@ -248,7 +248,7 @@
 
         async function unblockTeam(code) {
             showAllocModal('Unblock Team', 'Unblock team "' + code + '"? Members will be able to log in again.', async () => {
-                const resp = await API.post('/api/admin/unblock/team/' + code, {});
+                const resp = await API.post('/api/admin/unblock', { type: 'team', target: code });
                 if (resp && resp.ok) { loadTeams(); }
                 else { const d = resp ? await resp.json() : {}; showError('error-msg', d.detail || 'Failed'); }
             });
@@ -256,7 +256,7 @@
 
         async function blockParticipant(email) {
             showAllocModal('Block Participant', 'Block participant "' + email + '"? They will not be able to log in.', async () => {
-                const resp = await API.post('/api/admin/block/participant/' + encodeURIComponent(email), {});
+                const resp = await API.post('/api/admin/block', { type: 'participant', target: email });
                 if (resp && resp.ok) { loadTeams(); }
                 else { const d = resp ? await resp.json() : {}; showError('error-msg', d.detail || 'Failed'); }
             });
@@ -264,17 +264,18 @@
 
         async function unblockParticipant(email) {
             showAllocModal('Unblock Participant', 'Unblock participant "' + email + '"?', async () => {
-                const resp = await API.post('/api/admin/unblock/participant/' + encodeURIComponent(email), {});
+                const resp = await API.post('/api/admin/unblock', { type: 'participant', target: email });
                 if (resp && resp.ok) { loadTeams(); }
                 else { const d = resp ? await resp.json() : {}; showError('error-msg', d.detail || 'Failed'); }
             });
         }
 
         async function deleteTeam(code, name) {
-            if (!confirm('Delete team "' + name + '" (' + code + ')? This will remove all participants, allocations, and submissions.')) return;
-            const resp = await API.del('/api/admin/teams/' + code);
-            if (resp && resp.ok) { loadTeams(); }
-            else { const d = resp ? await resp.json() : {}; showError('error-msg', d.detail || 'Failed to delete team'); }
+            showAllocModal('Delete Team', 'Delete team "' + name + '" (' + code + ')? This will remove all participants, allocations, and submissions permanently.', async () => {
+                const resp = await API.del('/api/admin/teams/' + code);
+                if (resp && resp.ok) { loadTeams(); }
+                else { const d = resp ? await resp.json() : {}; showError('error-msg', d.detail || 'Failed to delete team'); }
+            });
         }
 
         function showCreateWizard() {

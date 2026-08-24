@@ -6,26 +6,45 @@
     <title>Event Control - Legacy Code Rescue</title>
     <link rel="stylesheet" href="/static/css/styles.css">
     <style>
-        .status-hero { text-align:center; padding:28px; margin-bottom:20px; background:var(--bg-card); border:1px solid var(--border); border-radius:var(--radius-md); }
-        .status-hero .status-label { font-size:12px; font-weight:600; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:8px; }
-        .status-hero .status-value { font-size:28px; font-weight:700; margin-bottom:4px; }
-        .status-hero .status-value.upcoming { color:var(--warning); }
-        .status-hero .status-value.ongoing { color:var(--success); }
-        .status-hero .status-value.completed { color:var(--danger); }
-        .status-hero .status-value.draft { color:var(--text-muted); }
-        .countdown-display { display:flex; justify-content:center; gap:12px; margin-top:16px; }
+        .status-hero { text-align:center; padding:32px; margin-bottom:24px; background:var(--bg-card); border:1px solid var(--border); border-radius:var(--radius-md); position:relative; overflow:hidden; }
+        .status-hero::before { content:''; position:absolute; top:0; left:0; right:0; height:3px; }
+        .status-hero.draft::before { background:var(--text-muted); }
+        .status-hero.upcoming::before { background:var(--warning); }
+        .status-hero.ongoing::before { background:var(--success); }
+        .status-hero.completed::before { background:var(--danger); }
+        .status-label { font-size:11px; font-weight:600; color:var(--text-muted); text-transform:uppercase; letter-spacing:1px; margin-bottom:8px; }
+        .status-value { font-size:32px; font-weight:800; margin-bottom:4px; }
+        .status-value.draft { color:var(--text-muted); }
+        .status-value.upcoming { color:var(--warning); }
+        .status-value.ongoing { color:var(--success); }
+        .status-value.completed { color:var(--danger); }
+        .event-code-badge { display:inline-flex; align-items:center; gap:6px; padding:6px 16px; background:var(--bg-input); border:1px solid var(--border); border-radius:var(--radius-full); font-family:var(--font-mono); font-size:14px; font-weight:600; color:var(--primary); margin-top:8px; cursor:pointer; transition:var(--transition); }
+        .event-code-badge:hover { border-color:var(--primary); }
+        .event-code-badge .copy-hint { font-size:10px; color:var(--text-muted); font-family:var(--font-sans); }
+        .countdown-display { display:flex; justify-content:center; gap:12px; margin-top:20px; }
         .countdown-block { text-align:center; }
-        .countdown-block .countdown-num { font-size:32px; font-weight:700; color:var(--primary); font-family:var(--font-mono); min-width:64px; display:block; }
-        .countdown-block .countdown-label { font-size:11px; color:var(--text-muted); text-transform:uppercase; }
-        .info-card { background:var(--bg-card); border:1px solid var(--border); border-radius:var(--radius-md); padding:16px 20px; }
-        .info-card .info-label { font-size:11px; font-weight:600; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px; }
-        .info-card .info-value { font-size:15px; font-weight:600; color:var(--text-primary); }
-        .info-card .info-value.muted { color:var(--text-muted); font-size:13px; }
+        .countdown-block .countdown-num { font-size:28px; font-weight:700; color:var(--primary); font-family:var(--font-mono); min-width:56px; display:block; }
+        .countdown-block .countdown-label { font-size:10px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px; }
+        .info-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px; margin-bottom:24px; }
+        .info-card { background:var(--bg-card); border:1px solid var(--border); border-radius:var(--radius-md); padding:16px; }
+        .info-card .info-label { font-size:10px; font-weight:600; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px; }
+        .info-card .info-value { font-size:14px; font-weight:600; color:var(--text-primary); }
+        .info-card .info-value.muted { color:var(--text-muted); font-size:12px; }
+        .section-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:16px; }
+        .section-header h2 { font-size:16px; font-weight:700; }
         .toggle-group { display:flex; gap:4px; background:var(--bg-input); border-radius:var(--radius); padding:4px; }
         .toggle-btn { flex:1; padding:8px 16px; border:none; background:transparent; border-radius:var(--radius-sm); font-size:13px; font-weight:600; color:var(--text-muted); cursor:pointer; transition:var(--transition); font-family:var(--font-sans); }
         .toggle-btn.active { background:var(--bg-card); color:var(--text-primary); box-shadow:var(--shadow-sm); }
         .toggle-btn.yes-active { background:var(--success-bg); color:var(--success); }
         .toggle-btn.no-active { background:var(--danger-bg); color:var(--danger); }
+        .history-item { display:flex; align-items:flex-start; gap:12px; padding:12px; background:var(--bg-input); border:1px solid var(--border); border-radius:var(--radius); margin-bottom:8px; }
+        .history-dot { width:8px; height:8px; border-radius:50%; background:var(--primary); margin-top:5px; flex-shrink:0; }
+        .history-dot.restart { background:var(--warning); }
+        .history-dot.update { background:var(--secondary); }
+        .history-info { flex:1; }
+        .history-info .history-action { font-size:13px; font-weight:600; color:var(--text-primary); }
+        .history-info .history-detail { font-size:12px; color:var(--text-secondary); margin-top:2px; }
+        .history-info .history-meta { font-size:11px; color:var(--text-muted); margin-top:4px; }
     </style>
 </head>
 <body>
@@ -36,133 +55,304 @@
         document.body.innerHTML = renderAdminLayout('event', 'Event Control');
         initTheme();
         document.getElementById('pageContent').innerHTML = `
-            <div class="page-header"><h1>Event Control</h1><p>Configure and manage the event lifecycle</p></div>
+            <div class="page-header"><h1>Event Control</h1><p>Configure, start, and manage the event lifecycle</p></div>
             <div id="error-msg" class="error-message"></div>
             <div id="success-msg" class="success-message"></div>
-            <div class="status-hero" id="statusHero">
+
+            <div class="status-hero draft" id="statusHero">
                 <div class="status-label">Current Event Status</div>
                 <div class="status-value draft" id="statusValue">Loading...</div>
+                <div id="eventCodeWrap" style="display:none;">
+                    <div class="event-code-badge" id="eventCodeBadge" onclick="copyEventCode()" title="Click to copy">
+                        <span id="eventCodeText"></span>
+                        <span class="copy-hint">copy</span>
+                    </div>
+                </div>
                 <div id="countdownDisplay"></div>
             </div>
-            <div id="infoCards" class="grid-2 mb-3" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr));">
+
+            <div class="info-grid" id="infoCards">
+                <div class="info-card"><div class="info-label">Event Code</div><div class="info-value muted" id="infoCode">-</div></div>
                 <div class="info-card"><div class="info-label">Start Time</div><div class="info-value muted" id="infoStart">Not set</div></div>
                 <div class="info-card"><div class="info-label">End Time</div><div class="info-value muted" id="infoEnd">Not set</div></div>
                 <div class="info-card"><div class="info-label">Duration Limit</div><div class="info-value" id="infoDuration">-</div></div>
                 <div class="info-card"><div class="info-label">Multi-Submission</div><div class="info-value" id="infoMulti">-</div></div>
             </div>
-            <div class="grid-2 mb-3">
-                <div class="card" style="border:2px solid var(--danger);position:relative;overflow:hidden;">
-                    <div style="position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,var(--danger),var(--warning));"></div>
-                    <div class="card-header"><h3 style="color:var(--danger);">Restart Event</h3></div>
-                    <p style="font-size:13px; color:var(--text-secondary); margin-bottom:16px; line-height:1.6;">Reset the event lifecycle. Allocations, submissions, and workspaces will be cleared. Teams and repositories are preserved.</p>
-                    <button class="btn btn-danger" onclick="showRestartModal()" style="width:auto;">${ICONS.refresh} Restart Event</button>
+
+            <div class="grid-2 mb-3" id="configRow">
+                <div class="card">
+                    <div class="card-header"><h3>Start New Event</h3></div>
+                    <p style="font-size:13px; color:var(--text-secondary); margin-bottom:16px; line-height:1.6;">Configure start/end times and launch a new event. A unique event code will be generated automatically.</p>
+                    <button class="btn btn-primary" onclick="showStartModal()" id="startBtn" style="width:auto;">${ICONS.play} Start Event</button>
                 </div>
                 <div class="card">
-                    <div class="card-header"><h3>Event Timing</h3></div>
-                    <p style="font-size:13px; color:var(--text-secondary); margin-bottom:16px; line-height:1.6;">Configure event start/end times, duration limits, and submission rules.</p>
-                    <button class="btn btn-secondary" onclick="showTimingModal()" style="width:auto;">${ICONS.clock} Configure Timing</button>
+                    <div class="card-header"><h3>Configure Timing</h3></div>
+                    <p style="font-size:13px; color:var(--text-secondary); margin-bottom:16px; line-height:1.6;">Update start/end times, duration limits, and submission rules for the current event.</p>
+                    <button class="btn btn-secondary" onclick="showTimingModal()" id="configBtn" style="width:auto;">${ICONS.clock} Configure Timing</button>
                 </div>
             </div>
+
+            <div class="card mb-3" style="border:2px solid var(--danger);position:relative;overflow:hidden;">
+                <div style="position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,var(--danger),var(--warning));"></div>
+                <div class="card-header"><h3 style="color:var(--danger);">Restart Event</h3></div>
+                <p style="font-size:13px; color:var(--text-secondary); margin-bottom:16px; line-height:1.6;">Reset the event lifecycle. Allocations, submissions, and workspaces will be cleared. Teams and repositories are preserved. A new event code will be generated.</p>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;font-size:12px;">
+                    <span style="color:var(--warning);">Clears: allocations, submissions, workspaces, checkins</span>
+                    <span style="color:var(--success);">Preserves: teams, repositories, audit logs</span>
+                </div>
+                <div style="margin-top:16px;"><button class="btn btn-danger" onclick="showRestartModal()" style="width:auto;">${ICONS.refresh} Restart Event</button></div>
+            </div>
+
+            <div class="card mb-3">
+                <div class="section-header"><h2>Event History</h2><button class="btn btn-sm btn-secondary" onclick="loadHistory()">${ICONS.refresh} Refresh</button></div>
+                <div id="historyContent"><div class="flex-center" style="padding:16px;"><span class="loading-spinner"></span></div></div>
+            </div>
+
+            <div id="startModal" class="modal-overlay">
+                <div class="modal" style="max-width:520px;">
+                    <div class="modal-header"><h3>Start New Event</h3><button class="modal-close" onclick="closeStartModal()">&times;</button></div>
+                    <form id="startForm">
+                        <div class="form-group"><label>Start Date & Time <span style="color:var(--danger);">*</span></label><input type="datetime-local" id="startStartTime" required></div>
+                        <div class="form-group"><label>End Date & Time <span style="color:var(--danger);">*</span></label><input type="datetime-local" id="startEndTime" required></div>
+                        <div class="form-group"><label>Duration Limit (minutes)</label><input type="number" id="startDuration" min="5" max="1440" value="300"><small style="color:var(--text-muted); font-size:11px; margin-top:4px; display:block;">Maximum allowed time per participant after event starts</small></div>
+                        <div class="form-group">
+                            <label>Allow Multiple Submissions</label>
+                            <div class="toggle-group" id="startMultiToggle">
+                                <button type="button" class="toggle-btn" onclick="setStartMulti(true, this)">Yes</button>
+                                <button type="button" class="toggle-btn active no-active" onclick="setStartMulti(false, this)">No</button>
+                            </div>
+                            <input type="hidden" id="startMultiSubmissions" value="false">
+                        </div>
+                        <div class="modal-footer" style="border-top:none;padding-top:8px;">
+                            <button type="button" class="btn btn-secondary" onclick="closeStartModal()">Cancel</button>
+                            <button type="submit" class="btn btn-primary" id="startSubmitBtn">${ICONS.play} Start Event</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <div id="timingModal" class="modal-overlay">
+                <div class="modal" style="max-width:520px;">
+                    <div class="modal-header"><h3>Configure Timing</h3><button class="modal-close" onclick="closeTimingModal()">&times;</button></div>
+                    <form id="timingForm">
+                        <div class="form-group"><label>Start Date & Time <span style="color:var(--danger);">*</span></label><input type="datetime-local" id="timingStartTime" required></div>
+                        <div class="form-group"><label>End Date & Time <span style="color:var(--danger);">*</span></label><input type="datetime-local" id="timingEndTime" required></div>
+                        <div class="form-group"><label>Duration Limit (minutes)</label><input type="number" id="timingDuration" min="5" max="1440" value="300"><small style="color:var(--text-muted); font-size:11px; margin-top:4px; display:block;">Maximum allowed time per participant after event starts</small></div>
+                        <div class="form-group">
+                            <label>Allow Multiple Submissions</label>
+                            <div class="toggle-group" id="timingMultiToggle">
+                                <button type="button" class="toggle-btn" onclick="setTimingMulti(true, this)">Yes</button>
+                                <button type="button" class="toggle-btn active no-active" onclick="setTimingMulti(false, this)">No</button>
+                            </div>
+                            <input type="hidden" id="timingMultiSubmissions" value="false">
+                        </div>
+                        <div class="modal-footer" style="border-top:none;padding-top:8px;">
+                            <button type="button" class="btn btn-secondary" onclick="closeTimingModal()">Cancel</button>
+                            <button type="submit" class="btn btn-primary" id="timingSaveBtn">${ICONS.save} Save Configuration</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
             <div id="restartModal" class="modal-overlay">
                 <div class="modal" style="max-width:440px;">
                     <div class="modal-header"><h3>Restart Event?</h3><button class="modal-close" onclick="closeRestartModal()">&times;</button></div>
-                    <p style="font-size:13px; color:var(--text-secondary); margin-bottom:12px;">Restarting the event will reset the event lifecycle and may affect existing participant progress/submissions. Are you sure you want to continue?</p>
-                    <p style="font-size:12px; color:var(--warning); margin-bottom:4px;">This will clear: allocations, submissions, workspaces, checkins.</p>
-                    <p style="font-size:12px; color:var(--success);">Preserved: teams, repositories, audit logs.</p>
+                    <p style="font-size:13px; color:var(--text-secondary); margin-bottom:12px;">This will reset the event lifecycle. All allocations, submissions, workspaces, and checkins will be cleared. A new event code will be generated.</p>
+                    <p style="font-size:12px; color:var(--warning); margin-bottom:4px;">This action cannot be undone.</p>
+                    <p style="font-size:12px; color:var(--success);">Teams and repositories will be preserved.</p>
                     <div class="modal-footer">
                         <button class="btn btn-secondary" onclick="closeRestartModal()">Cancel</button>
                         <button class="btn btn-danger" onclick="confirmRestart()" id="restartConfirmBtn">Confirm Restart</button>
                     </div>
                 </div>
             </div>
-            <div id="timingModal" class="modal-overlay">
-                <div class="modal" style="max-width:520px;">
-                    <div class="modal-header"><h3>Configure Timing</h3><button class="modal-close" onclick="closeTimingModal()">&times;</button></div>
-                    <form id="settingsForm">
-                        <div class="form-group"><label>Start Date & Time <span style="color:var(--danger);">*</span></label><input type="datetime-local" id="startTime" required></div>
-                        <div class="form-group"><label>End Date & Time <span style="color:var(--danger);">*</span></label><input type="datetime-local" id="endTime" required></div>
-                        <div class="form-group"><label>Duration Limit (minutes)</label><input type="number" id="duration" min="5" max="1440" value="300"><small style="color:var(--text-muted); font-size:11px; margin-top:4px; display:block;">Maximum allowed time per participant after event starts</small></div>
-                        <div class="form-group">
-                            <label>Allow Multiple Submissions</label>
-                            <div class="toggle-group" id="multiToggle">
-                                <button type="button" class="toggle-btn" onclick="setMulti(true, this)">Yes</button>
-                                <button type="button" class="toggle-btn active no-active" onclick="setMulti(false, this)">No</button>
-                            </div>
-                            <input type="hidden" id="multiSubmissions" value="false">
-                        </div>
-                        <div class="modal-footer" style="border-top:none;padding-top:8px;">
-                            <button type="button" class="btn btn-secondary" onclick="closeTimingModal()">Cancel</button>
-                            <button type="submit" class="btn btn-primary" id="saveBtn">${ICONS.save} Save Configuration</button>
-                        </div>
-                    </form>
-                </div>
-            </div>
         `;
-        let currentSettings = null;
-        function setMulti(val, btn) {
-            document.getElementById('multiSubmissions').value = val ? 'true' : 'false';
-            const btns = document.querySelectorAll('#multiToggle .toggle-btn');
+
+        let currentEvent = null;
+        let currentComputedStatus = 'DRAFT';
+
+        function setStartMulti(val, btn) {
+            document.getElementById('startMultiSubmissions').value = val ? 'true' : 'false';
+            const btns = document.querySelectorAll('#startMultiToggle .toggle-btn');
             btns.forEach(b => { b.classList.remove('active', 'yes-active', 'no-active'); });
             btn.classList.add('active');
-            btn.classList.add(val ? 'yes-active' : 'no-active');
+            btn.classList.add(val ? 'yes-active' : 'no-events');
         }
-        function showRestartModal() { document.getElementById('restartModal').classList.add('active'); }
-        function closeRestartModal() { document.getElementById('restartModal').classList.remove('active'); }
+        function setTimingMulti(val, btn) {
+            document.getElementById('timingMultiSubmissions').value = val ? 'true' : 'false';
+            const btns = document.querySelectorAll('#timingMultiToggle .toggle-btn');
+            btns.forEach(b => { b.classList.remove('active', 'yes-active', 'no-events'); });
+            btn.classList.add('active');
+            btn.classList.add(val ? 'yes-active' : 'no-events');
+        }
+
+        function showStartModal() { document.getElementById('startModal').classList.add('active'); }
+        function closeStartModal() { document.getElementById('startModal').classList.remove('active'); }
         function showTimingModal() {
-            document.getElementById('timingModal').classList.add('active');
-            if (currentSettings) {
-                if (currentSettings.event_start_time) document.getElementById('startTime').value = new Date(currentSettings.event_start_time).toISOString().slice(0, 16);
-                if (currentSettings.event_end_time) document.getElementById('endTime').value = new Date(currentSettings.event_end_time).toISOString().slice(0, 16);
-                document.getElementById('duration').value = currentSettings.event_duration_minutes || 300;
-                const multi = currentSettings.allow_multiple_submissions || false;
-                document.getElementById('multiSubmissions').value = multi ? 'true' : 'false';
-                const btns = document.querySelectorAll('#multiToggle .toggle-btn');
-                btns.forEach(b => { b.classList.remove('active', 'yes-active', 'no-active'); });
+            if (currentEvent) {
+                if (currentEvent.event_start_time) {
+                    const s = new Date(currentEvent.event_start_time);
+                    document.getElementById('timingStartTime').value = s.toISOString().slice(0, 16);
+                }
+                if (currentEvent.event_end_time) {
+                    const e = new Date(currentEvent.event_end_time);
+                    document.getElementById('timingEndTime').value = e.toISOString().slice(0, 16);
+                }
+                document.getElementById('timingDuration').value = currentEvent.event_duration_minutes || 300;
+                const multi = currentEvent.allow_multiple_submissions || false;
+                document.getElementById('timingMultiSubmissions').value = multi ? 'true' : 'false';
+                const btns = document.querySelectorAll('#timingMultiToggle .toggle-btn');
+                btns.forEach(b => { b.classList.remove('active', 'yes-active', 'no-events'); });
                 if (multi) { btns[0].classList.add('active', 'yes-active'); }
-                else { btns[1].classList.add('active', 'no-active'); }
+                else { btns[1].classList.add('active', 'no-events'); }
             }
+            document.getElementById('timingModal').classList.add('active');
         }
         function closeTimingModal() { document.getElementById('timingModal').classList.remove('active'); }
+        function showRestartModal() { document.getElementById('restartModal').classList.add('active'); }
+        function closeRestartModal() { document.getElementById('restartModal').classList.remove('active'); }
+
+        function copyEventCode() {
+            if (currentEvent && currentEvent.event_code) {
+                navigator.clipboard.writeText(currentEvent.event_code).then(() => {
+                    const hint = document.querySelector('#eventCodeBadge .copy-hint');
+                    if (hint) { hint.textContent = 'copied!'; setTimeout(() => { hint.textContent = 'copy'; }, 1500); }
+                }).catch(() => {});
+            }
+        }
+
+        document.getElementById('startForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            hideError('error-msg'); hideSuccess('success-msg');
+            const st = document.getElementById('startStartTime').value;
+            const et = document.getElementById('startEndTime').value;
+            const dur = parseInt(document.getElementById('startDuration').value);
+            const multi = document.getElementById('startMultiSubmissions').value === 'true';
+            if (!st || !et) { showError('error-msg', 'Start and End times are required'); return; }
+            const startDt = new Date(st);
+            const endDt = new Date(et);
+            if (endDt <= startDt) { showError('error-msg', 'End time must be after start time'); return; }
+            if (!dur || dur < 5) { showError('error-msg', 'Duration must be at least 5 minutes'); return; }
+            const btn = document.getElementById('startSubmitBtn');
+            btn.disabled = true; btn.innerHTML = '<span class="loading-spinner"></span>';
+            try {
+                const resp = await API.post('/api/admin/event/start', {
+                    event_start_time: startDt.toISOString(),
+                    event_end_time: endDt.toISOString(),
+                    event_duration_minutes: dur,
+                    allow_multiple_submissions: multi
+                });
+                const data = await resp.json();
+                if (resp.ok) { closeStartModal(); showSuccess('success-msg', 'Event started. Code: ' + data.event_code); loadStatus(); }
+                else { showError('error-msg', data.detail || 'Failed'); }
+            } catch (err) { showError('error-msg', err.message); }
+            btn.disabled = false; btn.innerHTML = ICONS.play + ' Start Event';
+        });
+
+        document.getElementById('timingForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            hideError('error-msg'); hideSuccess('success-msg');
+            const st = document.getElementById('timingStartTime').value;
+            const et = document.getElementById('timingEndTime').value;
+            const dur = parseInt(document.getElementById('timingDuration').value);
+            const multi = document.getElementById('timingMultiSubmissions').value === 'true';
+            if (!st || !et) { showError('error-msg', 'Start and End times are required'); return; }
+            const startDt = new Date(st);
+            const endDt = new Date(et);
+            if (endDt <= startDt) { showError('error-msg', 'End time must be after start time'); return; }
+            const btn = document.getElementById('timingSaveBtn');
+            btn.disabled = true; btn.innerHTML = '<span class="loading-spinner"></span>';
+            try {
+                const resp = await API.patch('/api/admin/event/current', {
+                    event_start_time: startDt.toISOString(),
+                    event_end_time: endDt.toISOString(),
+                    event_duration_minutes: dur,
+                    allow_multiple_submissions: multi
+                });
+                const data = await resp.json();
+                if (resp.ok) { closeTimingModal(); showSuccess('success-msg', 'Event configuration saved'); loadStatus(); }
+                else { showError('error-msg', data.detail || 'Failed to save'); }
+            } catch (err) { showError('error-msg', err.message); }
+            btn.disabled = false; btn.innerHTML = ICONS.save + ' Save Configuration';
+        });
+
         async function confirmRestart() {
             const btn = document.getElementById('restartConfirmBtn');
             btn.disabled = true; btn.innerHTML = '<span class="loading-spinner"></span> Restarting...';
             try {
                 const resp = await API.post('/api/admin/event/restart', { confirm: true });
                 const data = await resp.json();
-                if (resp.ok) { closeRestartModal(); showSuccess('success-msg', data.message); loadStatus(); }
+                if (resp.ok) { closeRestartModal(); showSuccess('success-msg', 'Event restarted. New code: ' + data.new_event_code); loadStatus(); loadHistory(); }
                 else { showError('error-msg', data.detail || 'Failed'); }
             } catch (err) { showError('error-msg', err.message); }
             btn.disabled = false; btn.innerHTML = 'Confirm Restart';
         }
+
         async function loadStatus() {
-            const resp = await API.get('/api/admin/event/status');
-            if (!resp) return;
-            const data = await resp.json();
-            currentSettings = data.settings;
-            const computed = data.computed_status;
-            const statusEl = document.getElementById('statusValue');
-            const countdownEl = document.getElementById('countdownDisplay');
-            statusEl.textContent = computed;
-            statusEl.className = 'status-value ' + computed.toLowerCase();
-            if (data.settings) {
-                document.getElementById('infoStart').textContent = data.settings.event_start_time ? formatDate(data.settings.event_start_time) : 'Not set';
-                document.getElementById('infoEnd').textContent = data.settings.event_end_time ? formatDate(data.settings.event_end_time) : 'Not set';
-                document.getElementById('infoDuration').textContent = (data.settings.event_duration_minutes || 300) + ' minutes';
-                const multi = data.settings.allow_multiple_submissions || false;
-                document.getElementById('infoMulti').textContent = multi ? 'Enabled' : 'Disabled';
-            }
-            countdownEl.innerHTML = '';
-            if (computed === 'UPCOMING' && data.countdown_seconds !== null && data.countdown_seconds !== undefined) {
-                startCountdown(data.countdown_seconds, 'countdownDisplay', 'Event starts in');
-            } else if (computed === 'ONGOING' && data.remaining_seconds !== null && data.remaining_seconds !== undefined) {
-                startCountdown(data.remaining_seconds, 'countdownDisplay', 'Time remaining');
-            }
+            try {
+                const resp = await API.get('/api/admin/event/current');
+                if (!resp) return;
+                const data = await resp.json();
+                currentEvent = data.event;
+                currentComputedStatus = data.computed_status;
+
+                const statusEl = document.getElementById('statusValue');
+                const heroEl = document.getElementById('statusHero');
+                statusEl.textContent = data.computed_status;
+                statusEl.className = 'status-value ' + data.computed_status.toLowerCase();
+                heroEl.className = 'status-hero ' + data.computed_status.toLowerCase();
+
+                const codeWrap = document.getElementById('eventCodeWrap');
+                const infoCode = document.getElementById('infoCode');
+                if (currentEvent && currentEvent.event_code) {
+                    codeWrap.style.display = '';
+                    document.getElementById('eventCodeText').textContent = currentEvent.event_code;
+                    infoCode.textContent = currentEvent.event_code;
+                } else {
+                    codeWrap.style.display = 'none';
+                    infoCode.textContent = '-';
+                }
+
+                if (currentEvent) {
+                    document.getElementById('infoStart').textContent = currentEvent.event_start_time ? formatDate(currentEvent.event_start_time) : 'Not set';
+                    document.getElementById('infoEnd').textContent = currentEvent.event_end_time ? formatDate(currentEvent.event_end_time) : 'Not set';
+                    document.getElementById('infoDuration').textContent = (currentEvent.event_duration_minutes || 300) + ' minutes';
+                    const multi = currentEvent.allow_multiple_submissions || false;
+                    document.getElementById('infoMulti').textContent = multi ? 'Enabled' : 'Disabled';
+                } else {
+                    document.getElementById('infoStart').textContent = 'Not set';
+                    document.getElementById('infoEnd').textContent = 'Not set';
+                    document.getElementById('infoDuration').textContent = '-';
+                    document.getElementById('infoMulti').textContent = '-';
+                }
+
+                const startBtn = document.getElementById('startBtn');
+                const configBtn = document.getElementById('configBtn');
+                if (data.computed_status === 'ONGOING' || data.computed_status === 'COMPLETED') {
+                    startBtn.disabled = true;
+                    startBtn.textContent = 'Event Active';
+                    configBtn.disabled = true;
+                    configBtn.textContent = 'Locked';
+                } else {
+                    startBtn.disabled = false;
+                    configBtn.disabled = false;
+                }
+
+                const countdownEl = document.getElementById('countdownDisplay');
+                countdownEl.innerHTML = '';
+                if (data.computed_status === 'UPCOMING' && data.countdown_seconds !== null && data.countdown_seconds !== undefined) {
+                    startCountdown(data.countdown_seconds, 'countdownDisplay', 'Event starts in');
+                } else if (data.computed_status === 'ONGOING' && data.remaining_seconds !== null && data.remaining_seconds !== undefined) {
+                    startCountdown(data.remaining_seconds, 'countdownDisplay', 'Time remaining');
+                }
+            } catch (e) { console.error('Status load error:', e); }
         }
+
         function startCountdown(seconds, elementId, label) {
             let remaining = seconds;
             const el = document.getElementById(elementId);
             function update() {
-                if (remaining <= 0) { el.innerHTML = '<p style="font-size:14px; color:var(--text-muted);">Reloading...</p>'; setTimeout(() => loadStatus(), 2000); return; }
+                if (remaining <= 0) { el.innerHTML = '<p style="font-size:14px;color:var(--text-muted);">Reloading...</p>'; setTimeout(() => loadStatus(), 2000); return; }
                 const d = Math.floor(remaining / 86400);
                 const h = Math.floor((remaining % 86400) / 3600);
                 const m = Math.floor((remaining % 3600) / 60);
@@ -179,31 +369,36 @@
             }
             update();
         }
-        document.getElementById('settingsForm').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            hideError('error-msg'); hideSuccess('success-msg');
-            const st = document.getElementById('startTime').value;
-            const et = document.getElementById('endTime').value;
-            const dur = parseInt(document.getElementById('duration').value);
-            const multi = document.getElementById('multiSubmissions').value === 'true';
-            if (!st || !et) { showError('error-msg', 'Start and End times are required'); return; }
-            const startDt = new Date(st);
-            const endDt = new Date(et);
-            if (endDt <= startDt) { showError('error-msg', 'End time must be after start time'); return; }
-            if (!dur || dur < 5) { showError('error-msg', 'Duration must be at least 5 minutes'); return; }
-            const body = {
-                event_start_time: startDt.toISOString(),
-                event_end_time: endDt.toISOString(),
-                event_duration_minutes: dur,
-                allow_multiple_submissions: multi
-            };
+
+        async function loadHistory() {
+            const el = document.getElementById('historyContent');
+            el.innerHTML = '<div class="flex-center" style="padding:16px;"><span class="loading-spinner"></span></div>';
             try {
-                const resp = await API.put('/api/admin/event/settings', body);
-                if (resp && resp.ok) { closeTimingModal(); showSuccess('success-msg', 'Event configuration saved'); loadStatus(); }
-                else { const data = resp ? await resp.json() : {}; showError('error-msg', data.detail || 'Failed to save'); }
-            } catch (err) { showError('error-msg', err.message); }
-        });
+                const resp = await API.get('/api/admin/event/history');
+                if (!resp) { el.innerHTML = '<p class="text-muted" style="font-size:13px;">Failed to load history</p>'; return; }
+                const data = await resp.json();
+                if (!data.history || data.history.length === 0) {
+                    el.innerHTML = '<div class="empty-state"><p class="text-muted">No event history yet</p></div>';
+                    return;
+                }
+                let html = '';
+                for (const h of data.history) {
+                    const actionType = h.action === 'event_restarted' ? 'restart' : (h.action === 'event_settings_updated' ? 'update' : '');
+                    const dotClass = 'history-dot' + (actionType ? ' ' + actionType : '');
+                    html += '<div class="history-item">';
+                    html += '<div class="' + dotClass + '"></div>';
+                    html += '<div class="history-info">';
+                    html += '<div class="history-action">' + escapeHtml(h.action.replace(/_/g, ' ')) + '</div>';
+                    html += '<div class="history-detail">' + escapeHtml(h.details || '') + '</div>';
+                    html += '<div class="history-meta">' + escapeHtml(h.actor || 'admin') + ' &middot; ' + formatDate(h.timestamp) + '</div>';
+                    html += '</div></div>';
+                }
+                el.innerHTML = html;
+            } catch (e) { el.innerHTML = '<p class="text-muted" style="font-size:13px;">Failed to load history</p>'; }
+        }
+
         loadStatus();
+        loadHistory();
     </script>
 </body>
 </html>
