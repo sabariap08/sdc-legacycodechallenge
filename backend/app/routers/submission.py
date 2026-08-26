@@ -1,5 +1,5 @@
 import os
-import subprocess
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException
 from app.database import get_db
 from app.security import get_participant_user
@@ -9,6 +9,7 @@ from datetime import datetime
 
 router = APIRouter(prefix="/api/submission", tags=["submission"])
 
+TEST_TIMEOUT = 60
 
 @router.post("/submit")
 async def submit_final(user=Depends(get_participant_user)):
@@ -43,10 +44,6 @@ async def submit_final(user=Depends(get_participant_user)):
     score = sum(1 for r in evaluation_result.get("results", []) if r.get("passed", False))
     total = len(evaluation_result.get("results", []))
 
-    version = 1
-    if existing:
-        version = existing.get("version", 1) + 1
-
     submission_doc = {
         "team_code": team_code,
         "challenge_code": challenge_code,
@@ -55,7 +52,7 @@ async def submit_final(user=Depends(get_participant_user)):
         "score": score,
         "total": total,
         "evaluation_result": evaluation_result,
-        "version": version,
+        "version": 1,
         "auto_submitted": False,
     }
 
@@ -64,7 +61,7 @@ async def submit_final(user=Depends(get_participant_user)):
     await db.audit_logs.insert_one({
         "action": "submission",
         "actor": team_code,
-        "details": f"Score: {score}/{total} (v{version})",
+        "details": f"Score: {score}/{total} (v1)",
         "timestamp": datetime.utcnow()
     })
 
@@ -72,10 +69,9 @@ async def submit_final(user=Depends(get_participant_user)):
         "message": "Submission evaluated",
         "score": score,
         "total": total,
-        "version": version,
+        "version": 1,
         "results": evaluation_result.get("results", [])
     }
-
 
 @router.post("/auto-submit")
 async def auto_submit(user=Depends(get_participant_user)):
@@ -127,7 +123,6 @@ async def auto_submit(user=Depends(get_participant_user)):
 
     return {"message": "Auto-submitted", "score": score, "total": total}
 
-
 @router.get("/status")
 async def submission_status(user=Depends(get_participant_user)):
     db = get_db()
@@ -142,13 +137,6 @@ async def submission_status(user=Depends(get_participant_user)):
     settings = await db.event_settings.find_one({})
     computed = compute_event_status(settings)
 
-    all_subs = []
-    async for s in db.submissions.find({"team_code": team_code}).sort("submitted_at", -1):
-        s.pop("_id", None)
-        if "submitted_at" in s:
-            s["submitted_at"] = s["submitted_at"].isoformat() if hasattr(s["submitted_at"], "isoformat") else str(s["submitted_at"])
-        all_subs.append(s)
-
     return {
         "submitted": True,
         "score": sub.get("score", 0),
@@ -158,9 +146,24 @@ async def submission_status(user=Depends(get_participant_user)):
         "auto_submitted": sub.get("auto_submitted", False),
         "results": sub.get("evaluation_result", {}).get("results", []),
         "event_status": computed,
-        "history": [],
     }
 
+def _clean_env():
+    sensitive = {
+        "MONGODB_URI", "DATABASE_NAME", "SECRET_KEY",
+        "ADMIN_USERNAME", "ADMIN_PASSWORD",
+    }
+    env = {}
+    for k, v in os.environ.items():
+        skip = False
+        for s in sensitive:
+            if s in k.upper():
+                skip = True
+                break
+        if not skip:
+            env[k] = v
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    return env
 
 async def _run_evaluation(workspace, challenge_code, team_code):
     evaluator_dir = os.path.join(EVALUATOR_PATH, challenge_code)
@@ -183,32 +186,41 @@ async def _run_evaluation(workspace, challenge_code, team_code):
                         for i in range(10)]
         }
 
+    env = _clean_env()
     results = []
     for i, test_file in enumerate(test_files, 1):
         test_path = os.path.join(evaluator_dir, test_file)
-        try:
-            env = os.environ.copy()
-            env["WORKSPACE_PATH"] = workspace
-            env["CHALLENGE_CODE"] = challenge_code
-            env["TEAM_CODE"] = team_code
+        env_run = env.copy()
+        env_run["WORKSPACE_PATH"] = workspace
+        env_run["CHALLENGE_CODE"] = challenge_code
+        env_run["TEAM_CODE"] = team_code
 
-            result = subprocess.run(
-                ["python", test_path],
-                capture_output=True,
-                text=True,
-                timeout=30,
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "python3", test_path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
                 cwd=workspace,
-                env=env
+                env=env_run,
             )
-            passed = result.returncode == 0
-            reason = result.stdout[-500:] if not passed else ""
+            try:
+                out, err = await asyncio.wait_for(proc.communicate(), timeout=TEST_TIMEOUT)
+            except asyncio.TimeoutError:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                results.append({"test": f"Bug {i}", "passed": False, "reason": "Test timed out"})
+                continue
+
+            passed = proc.returncode == 0
+            stdout = out.decode("utf-8", errors="replace") if out else ""
+            reason = stdout[-500:].strip() if not passed else ""
             results.append({
                 "test": f"Bug {i}",
                 "passed": passed,
-                "reason": reason.strip() if not passed else "PASS"
+                "reason": reason if not passed else "PASS",
             })
-        except subprocess.TimeoutExpired:
-            results.append({"test": f"Bug {i}", "passed": False, "reason": "Test timed out"})
         except Exception as e:
             results.append({"test": f"Bug {i}", "passed": False, "reason": str(e)})
 

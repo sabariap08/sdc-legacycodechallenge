@@ -5,112 +5,353 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>IDE - Legacy Code Rescue</title>
     <link rel="stylesheet" href="/static/css/styles.css">
+    <style>
+        :root {
+            --ide-bg: #1e1e2e;
+            --ide-sidebar: #181825;
+            --ide-header: #11111b;
+            --ide-panel: #11111b;
+            --ide-border: #313244;
+            --ide-text: #cdd6f4;
+            --ide-text-dim: #6c7086;
+            --ide-accent: #89b4fa;
+            --ide-success: #a6e3a1;
+            --ide-error: #f38ba8;
+            --ide-warning: #fab387;
+            --ide-tab-active: #1e1e2e;
+            --ide-tab-hover: #313244;
+        }
+        [data-theme="light"] {
+            --ide-bg: #eff1f5;
+            --ide-sidebar: #e6e9ef;
+            --ide-header: #dce0e8;
+            --ide-panel: #dce0e8;
+            --ide-border: #ccd0da;
+            --ide-text: #4c4f69;
+            --ide-text-dim: #9ca0b0;
+            --ide-accent: #1e66f5;
+            --ide-success: #40a02b;
+            --ide-error: #d20f39;
+            --ide-warning: #df8e1d;
+            --ide-tab-active: #eff1f5;
+            --ide-tab-hover: #ccd0da;
+        }
+        * { margin:0; padding:0; box-sizing:border-box; }
+        html, body { height:100%; overflow:hidden; background:var(--ide-bg); color:var(--ide-text); font-family:var(--font-sans); }
+        .ide-root { display:flex; flex-direction:column; height:100vh; }
+
+        /* HEADER */
+        .ide-header { display:flex; align-items:center; height:40px; background:var(--ide-header); border-bottom:1px solid var(--ide-border); padding:0 12px; gap:12px; flex-shrink:0; z-index:100; }
+        .ide-header .brand { display:flex; align-items:center; gap:8px; font-size:12px; font-weight:700; color:var(--ide-accent); white-space:nowrap; }
+        .ide-header .brand svg { flex-shrink:0; }
+        .ide-header .sep { width:1px; height:18px; background:var(--ide-border); flex-shrink:0; }
+        .ide-header .challenge-pill { display:flex; align-items:center; gap:6px; padding:3px 10px; background:rgba(137,180,250,.1); border:1px solid rgba(137,180,250,.2); border-radius:var(--radius-full); font-size:11px; color:var(--ide-accent); white-space:nowrap; cursor:pointer; transition:var(--transition); }
+        .ide-header .challenge-pill:hover { background:rgba(137,180,250,.15); }
+        .ide-header .challenge-pill .code { font-family:var(--font-mono); font-weight:600; }
+        .ide-header .spacer { flex:1; }
+        .ide-header .timer { display:flex; align-items:center; gap:5px; font-family:var(--font-mono); font-size:12px; font-weight:600; color:var(--ide-accent); padding:3px 10px; background:rgba(137,180,250,.08); border-radius:var(--radius); }
+        .ide-header .timer svg { flex-shrink:0; }
+        .ide-header .actions { display:flex; align-items:center; gap:6px; }
+        .ide-header .actions .btn { padding:4px 12px; font-size:11px; border-radius:var(--radius-sm); }
+        .ide-header .actions .btn-run { background:var(--ide-success); color:#1e1e2e; border:none; font-weight:700; }
+        .ide-header .actions .btn-run:hover { filter:brightness(1.1); }
+        .ide-header .actions .btn-run.running { background:var(--ide-warning); animation:pulse 1.5s infinite; }
+        .ide-header .actions .btn-stop { background:var(--ide-error); color:#1e1e2e; border:none; font-weight:700; display:none; }
+        .ide-header .actions .btn-stop.visible { display:inline-flex; }
+        .ide-header .actions .btn-submit { background:var(--ide-accent); color:#1e1e2e; border:none; font-weight:700; }
+        .ide-header .actions .btn-submit:hover { filter:brightness(1.1); }
+        .ide-header .actions .btn-save { background:transparent; color:var(--ide-text-dim); border:1px solid var(--ide-border); }
+        .ide-header .actions .btn-save:hover { color:var(--ide-text); border-color:var(--ide-text-dim); }
+        .ide-header .actions .btn-save.modified { color:var(--ide-warning); border-color:var(--ide-warning); }
+        .ide-header .icon-btn { width:28px; height:28px; border-radius:var(--radius-sm); border:none; background:transparent; color:var(--ide-text-dim); cursor:pointer; display:flex; align-items:center; justify-content:center; transition:var(--transition); }
+        .ide-header .icon-btn:hover { background:var(--ide-tab-hover); color:var(--ide-text); }
+
+        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.7} }
+
+        /* BODY */
+        .ide-body { display:flex; flex:1; overflow:hidden; }
+
+        /* SIDEBAR */
+        .ide-sidebar { width:220px; background:var(--ide-sidebar); border-right:1px solid var(--ide-border); display:flex; flex-direction:column; flex-shrink:0; overflow:hidden; transition:width .2s ease, transform .3s ease; }
+        .ide-sidebar.collapsed { width:0; border-right:none; }
+        .ide-sidebar-header { display:flex; align-items:center; justify-content:space-between; padding:8px 12px; font-size:10px; font-weight:700; color:var(--ide-text-dim); text-transform:uppercase; letter-spacing:1px; border-bottom:1px solid var(--ide-border); flex-shrink:0; }
+        .ide-sidebar-header .collapse-btn { background:none; border:none; color:var(--ide-text-dim); cursor:pointer; padding:2px; display:flex; }
+        .ide-sidebar-header .collapse-btn:hover { color:var(--ide-text); }
+        .ide-file-tree { flex:1; overflow-y:auto; padding:4px 0; }
+        .ide-file-item { display:flex; align-items:center; gap:6px; padding:4px 12px; cursor:pointer; font-size:12px; color:var(--ide-text-dim); transition:background .1s; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+        .ide-file-item:hover { background:var(--ide-tab-hover); color:var(--ide-text); }
+        .ide-file-item.active { background:rgba(137,180,250,.12); color:var(--ide-accent); }
+        .ide-file-item.directory { color:var(--ide-text); font-weight:500; }
+        .ide-file-item .indent { display:inline-block; flex-shrink:0; }
+        .ide-file-item .icon { width:16px; height:16px; flex-shrink:0; display:flex; align-items:center; justify-content:center; }
+        .ide-file-item .icon svg { width:14px; height:14px; }
+        .ide-file-item .name { overflow:hidden; text-overflow:ellipsis; }
+
+        /* MAIN */
+        .ide-main { flex:1; display:flex; flex-direction:column; overflow:hidden; min-width:0; }
+
+        /* TABS */
+        .ide-tabs { display:flex; background:var(--ide-sidebar); border-bottom:1px solid var(--ide-border); overflow-x:auto; flex-shrink:0; }
+        .ide-tabs::-webkit-scrollbar { height:0; }
+        .ide-tab { display:flex; align-items:center; gap:6px; padding:6px 14px; font-size:12px; color:var(--ide-text-dim); cursor:pointer; border-right:1px solid var(--ide-border); white-space:nowrap; transition:background .1s; border-bottom:2px solid transparent; }
+        .ide-tab:hover { background:var(--ide-tab-hover); color:var(--ide-text); }
+        .ide-tab.active { background:var(--ide-tab-active); color:var(--ide-text); border-bottom-color:var(--ide-accent); }
+        .ide-tab .dot { width:6px; height:6px; border-radius:50%; background:var(--ide-warning); display:none; }
+        .ide-tab.modified .dot { display:block; }
+        .ide-tab .close { font-size:14px; cursor:pointer; opacity:0; padding:0 2px; transition:opacity .1s; }
+        .ide-tab:hover .close { opacity:.5; }
+        .ide-tab .close:hover { opacity:1; color:var(--ide-error); }
+
+        /* EDITOR */
+        .ide-editor { flex:1; overflow:hidden; min-height:0; }
+
+        /* BOTTOM PANEL */
+        .ide-bottom { height:200px; display:flex; flex-direction:column; border-top:1px solid var(--ide-border); flex-shrink:0; background:var(--ide-panel); }
+        .ide-bottom-header { display:flex; align-items:center; background:var(--ide-sidebar); border-bottom:1px solid var(--ide-border); flex-shrink:0; }
+        .ide-bottom-tab { padding:6px 14px; font-size:11px; font-weight:600; color:var(--ide-text-dim); cursor:pointer; border:none; background:none; border-bottom:2px solid transparent; transition:color .1s; font-family:var(--font-sans); text-transform:uppercase; letter-spacing:.5px; }
+        .ide-bottom-tab:hover { color:var(--ide-text); }
+        .ide-bottom-tab.active { color:var(--ide-accent); border-bottom-color:var(--ide-accent); }
+        .ide-bottom-tab .badge { display:inline-flex; align-items:center; justify-content:center; min-width:16px; height:16px; padding:0 4px; border-radius:var(--radius-full); font-size:9px; font-weight:700; margin-left:4px; }
+        .ide-bottom-tab .badge.error { background:rgba(243,139,168,.15); color:var(--ide-error); }
+        .ide-bottom-tab .badge.success { background:rgba(166,227,161,.15); color:var(--ide-success); }
+        .ide-bottom-spacer { flex:1; }
+        .ide-bottom-resize { width:100%; height:4px; cursor:ns-resize; background:transparent; position:relative; }
+        .ide-bottom-resize:hover { background:var(--ide-accent); }
+        .ide-bottom-content { flex:1; overflow-y:auto; }
+        .ide-output { padding:8px 12px; font-family:var(--font-mono); font-size:12px; line-height:1.6; white-space:pre-wrap; word-break:break-all; color:var(--ide-text); min-height:100%; }
+        .ide-output .line { padding:1px 0; }
+        .ide-output .line-header { color:var(--ide-text-dim); font-size:10px; text-transform:uppercase; letter-spacing:.5px; padding:4px 0 2px; font-family:var(--font-sans); font-weight:600; }
+        .ide-output .line-stdout { color:var(--ide-text); }
+        .ide-output .line-stderr { color:var(--ide-error); }
+        .ide-output .line-info { color:var(--ide-text-dim); }
+        .ide-output .line-success { color:var(--ide-success); }
+        .ide-output .line-error { color:var(--ide-error); }
+        .ide-output .line-warning { color:var(--ide-warning); }
+        .ide-output .line-divider { border-top:1px solid var(--ide-border); margin:4px 0; }
+        .ide-output .line-meta { color:var(--ide-text-dim); font-size:11px; padding:4px 0; }
+        .ide-output .test-row { display:flex; align-items:flex-start; gap:8px; padding:2px 0; }
+        .ide-output .test-icon { font-weight:700; min-width:16px; flex-shrink:0; }
+        .ide-output .test-icon.pass { color:var(--ide-success); }
+        .ide-output .test-icon.fail { color:var(--ide-error); }
+        .ide-output .test-name { color:var(--ide-text); }
+        .ide-output .test-time { color:var(--ide-text-dim); font-size:11px; margin-left:auto; flex-shrink:0; }
+        .ide-output .test-reason { margin-left:24px; font-size:11px; color:var(--ide-text-dim); padding:2px 0; }
+
+        /* STATUS BAR */
+        .ide-statusbar { display:flex; align-items:center; height:22px; background:var(--ide-header); border-top:1px solid var(--ide-border); padding:0 12px; font-size:11px; color:var(--ide-text-dim); gap:16px; flex-shrink:0; }
+        .ide-statusbar .item { display:flex; align-items:center; gap:4px; }
+        .ide-statusbar .spacer { flex:1; }
+        .ide-statusbar .lang-badge { padding:1px 6px; background:rgba(137,180,250,.1); border-radius:var(--radius-xs); color:var(--ide-accent); font-weight:600; }
+
+        /* CHALLENGE PANEL (overlay) */
+        .challenge-panel { position:fixed; top:40px; left:0; right:0; bottom:0; background:var(--ide-bg); z-index:200; display:none; overflow-y:auto; }
+        .challenge-panel.open { display:block; }
+        .challenge-panel-inner { max-width:720px; margin:0 auto; padding:32px 24px; }
+        .challenge-panel-close { position:fixed; top:52px; right:16px; z-index:201; }
+
+        /* STDIN */
+        .ide-stdin { border-top:1px solid var(--ide-border); flex-shrink:0; }
+        .ide-stdin-header { display:flex; align-items:center; justify-content:space-between; padding:4px 12px; font-size:10px; font-weight:700; color:var(--ide-text-dim); text-transform:uppercase; letter-spacing:.5px; background:var(--ide-sidebar); }
+        .ide-stdin-toggle { background:none; border:none; color:var(--ide-text-dim); cursor:pointer; padding:2px; display:flex; }
+        .ide-stdin-toggle:hover { color:var(--ide-text); }
+        .ide-stdin textarea { width:100%; padding:6px 12px; font-family:var(--font-mono); font-size:12px; line-height:1.5; background:var(--ide-bg); color:var(--ide-text); border:none; resize:vertical; min-height:32px; max-height:100px; outline:none; }
+        .ide-stdin textarea::placeholder { color:var(--ide-text-dim); }
+        .ide-stdin.collapsed textarea { display:none; }
+        .ide-stdin.collapsed .ide-stdin-toggle svg { transform:rotate(-90deg); }
+
+        /* RESPONSIVE */
+        @media (max-width:768px) {
+            .ide-sidebar { position:fixed; top:40px; left:0; bottom:22px; width:240px; z-index:90; transform:translateX(-100%); transition:transform .3s ease; box-shadow:none; }
+            .ide-sidebar.open { transform:translateX(0); box-shadow:var(--shadow-xl); }
+            .ide-header .challenge-pill { display:none; }
+            .ide-bottom { height:160px; }
+        }
+        @media (max-width:480px) {
+            .ide-header { padding:0 8px; }
+            .ide-header .brand span { display:none; }
+            .ide-bottom { height:120px; }
+        }
+    </style>
 </head>
 <body>
-    <div class="ide-layout">
+    <div class="ide-root">
         <header class="ide-header">
-            <div class="ide-header-left">
-                <button class="hamburger-btn ide-hamburger" onclick="toggleIDESidebar()" aria-label="Toggle file explorer">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+            <button class="icon-btn" onclick="toggleSidebar()" title="Toggle Explorer">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+            </button>
+            <div class="brand">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+                <span>Legacy Code Rescue</span>
+            </div>
+            <div class="sep"></div>
+            <div class="challenge-pill" id="challengePill" onclick="toggleChallengePanel()" title="View challenge details">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
+                <span class="code" id="challengeCodeDisplay">-</span>
+                <span id="challengeNameDisplay" style="max-width:120px;overflow:hidden;text-overflow:ellipsis;"></span>
+            </div>
+            <div class="spacer"></div>
+            <div class="timer" id="timerWrap">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                <span id="timerDisplay">--:--:--</span>
+            </div>
+            <div class="actions">
+                <button class="btn btn-save" id="saveBtn" onclick="saveFile()" title="Save (Ctrl+S)">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                    Save
                 </button>
-                <span class="ide-logo">Bug Buster IDE</span>
-                <span class="ide-sep hide-mobile">|</span>
-                <span class="hide-mobile" style="display:flex;align-items:center;gap:4px;">Team: <strong id="ideTeamName">-</strong></span>
-                <span class="ide-sep hide-mobile">|</span>
-                <span class="hide-mobile" style="display:flex;align-items:center;gap:4px;">Challenge: <strong id="ideChallenge" style="color:var(--primary);">-</strong></span>
-            </div>
-            <div class="ide-header-center">
-                <div class="ide-timer-wrap">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-                    <span id="timerDisplay" class="ide-timer">--:--:--</span>
-                </div>
-            </div>
-            <div class="ide-header-right">
-                <button id="ideThemeToggle" class="btn-icon" onclick="toggleIDEMode()" title="Toggle theme"></button>
-                <a href="/participant/dashboard" class="btn btn-sm btn-secondary">Dashboard</a>
-                <button class="btn btn-sm btn-ghost" onclick="logout()">Logout</button>
+                <button class="btn btn-run" id="runBtn" onclick="runCode()" title="Run (Ctrl+Enter)">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                    Run
+                </button>
+                <button class="btn btn-stop" id="stopBtn" onclick="stopExecution()" title="Stop">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
+                    Stop
+                </button>
+                <button class="btn btn-submit" id="submitBtn" onclick="submitFinal()" title="Submit">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                    Submit
+                </button>
+                <div class="sep"></div>
+                <button class="icon-btn" onclick="toggleTheme()" id="themeBtn" title="Toggle theme"></button>
+                <a href="/participant/dashboard" class="icon-btn" title="Dashboard">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+                </a>
+                <button class="icon-btn" onclick="logout()" title="Logout">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+                </button>
             </div>
         </header>
+
         <div class="ide-body">
             <aside class="ide-sidebar" id="ideSidebar">
-                <div class="ide-sidebar-header">EXPLORER</div>
+                <div class="ide-sidebar-header">
+                    <span>Explorer</span>
+                    <button class="collapse-btn" onclick="toggleSidebar()" title="Collapse">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                    </button>
+                </div>
                 <div id="fileTree" class="ide-file-tree"></div>
             </aside>
+
             <div class="ide-main">
-                <div class="ide-editor-area">
-                    <div class="ide-tabs" id="editorTabs"></div>
-                    <div id="editorContainer" class="ide-editor-container">
-                        <div class="empty-state" style="padding:48px;">
-                            <p class="text-muted">Select a file from the explorer to start editing</p>
-                        </div>
+                <div class="ide-tabs" id="editorTabs"></div>
+                <div class="ide-editor" id="editorContainer">
+                    <div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--ide-text-dim);font-size:13px;flex-direction:column;gap:8px;">
+                        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" opacity=".3"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+                        <span>Select a file from the explorer</span>
+                        <span style="font-size:11px;opacity:.5;">or press Ctrl+O to open</span>
                     </div>
                 </div>
-                <div class="ide-panels">
-                    <div class="ide-stdin-area" id="stdinArea">
-                        <div class="ide-stdin-header">
-                            <span>STDIN</span>
-                            <button class="ide-stdin-toggle" onclick="toggleStdin()" title="Toggle input area">
-                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
-                            </button>
+
+                <div class="ide-stdin" id="stdinArea">
+                    <div class="ide-stdin-header">
+                        <span>Input (stdin)</span>
+                        <button class="ide-stdin-toggle" onclick="toggleStdin()" title="Toggle input">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
+                        </button>
+                    </div>
+                    <textarea id="stdinInput" placeholder="Enter program input (one value per line)..." rows="2"></textarea>
+                </div>
+
+                <div class="ide-bottom" id="bottomPanel">
+                    <div class="ide-bottom-header">
+                        <button class="ide-bottom-tab active" data-panel="output" onclick="switchBottomPanel('output', this)">
+                            Output
+                        </button>
+                        <button class="ide-bottom-tab" data-panel="errors" onclick="switchBottomPanel('errors', this)">
+                            Errors <span class="badge error" id="errorBadge" style="display:none;">0</span>
+                        </button>
+                        <button class="ide-bottom-tab" data-panel="tests" id="testTab" onclick="switchBottomPanel('tests', this)" style="display:none;">
+                            Tests <span class="badge success" id="testBadge" style="display:none;">0</span>
+                        </button>
+                        <div class="ide-bottom-spacer"></div>
+                        <button class="icon-btn" onclick="clearPanel()" title="Clear output" style="margin-right:4px;">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+                        </button>
+                    </div>
+                    <div class="ide-bottom-content" id="bottomContent">
+                        <div class="ide-output" id="outputPanel">
+                            <div class="line line-info">Ready. Click Run to execute your code.</div>
                         </div>
-                        <textarea id="stdinInput" class="ide-stdin-textarea" placeholder="Enter input for your program (one value per line for each input() call)..." rows="2"></textarea>
-                    </div>
-                    <div class="ide-panel-tabs">
-                        <button class="ide-panel-tab active" onclick="switchPanel('terminal', this)">Terminal</button>
-                        <button class="ide-panel-tab" onclick="switchPanel('output', this)">Output</button>
-                        <button class="ide-panel-tab" onclick="switchPanel('tests', this)">Test Results</button>
-                    </div>
-                    <div class="ide-panel-content" id="panelContent">
-                        <div id="terminalOutput" class="ide-terminal">Welcome to Bug Buster IDE Terminal
-</div>
-                        <div id="generalOutput" class="ide-terminal" style="display:none;"></div>
-                        <div id="testOutput" class="ide-terminal" style="display:none;"></div>
-                    </div>
-                    <div class="ide-panel-actions">
-                        <button class="btn btn-sm btn-success" onclick="saveFile()" id="saveBtn">Save</button>
-                        <button class="btn btn-sm btn-primary" onclick="runCode()" id="runBtn">Run</button>
-                        <button class="btn btn-sm btn-secondary" onclick="runTests()" id="testBtn">Test</button>
-                        <button class="btn btn-sm btn-danger" onclick="submitFinal()" id="submitBtn">Submit Final</button>
+                        <div class="ide-output" id="errorsPanel" style="display:none;"></div>
+                        <div class="ide-output" id="testsPanel" style="display:none;"></div>
                     </div>
                 </div>
             </div>
         </div>
+
+        <div class="ide-statusbar">
+            <div class="item" id="statusLanguage">
+                <span class="lang-badge" id="langBadge">-</span>
+            </div>
+            <div class="item" id="statusTeam">
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
+                <span id="statusTeamCode">-</span>
+            </div>
+            <div class="item" id="statusBin">
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+                <span id="statusBinNumber">-</span>
+            </div>
+            <div class="spacer"></div>
+            <div class="item" id="statusFile" style="display:none;">
+                <span id="statusFilePath">-</span>
+            </div>
+            <div class="item" id="statusLines" style="display:none;">
+                <span id="statusLineCol">Ln 1, Col 1</span>
+            </div>
+            <div class="item" id="statusEncoding">UTF-8</div>
+        </div>
     </div>
+
+    <div id="challengePanel" class="challenge-panel">
+        <button class="btn btn-secondary challenge-panel-close" onclick="toggleChallengePanel()" style="font-size:12px;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            Close
+        </button>
+        <div class="challenge-panel-inner" id="challengePanelContent">
+            <div style="text-align:center;padding:48px;"><span class="loading-spinner"></span></div>
+        </div>
+    </div>
+
     <div id="submitModal" class="modal-overlay">
         <div class="modal">
             <div class="modal-header">
-                <h3>Submit Final</h3>
+                <h3>Submit Solution</h3>
                 <button class="modal-close" onclick="closeSubmitModal()">&times;</button>
             </div>
-            <p style="font-size:13px; color:var(--text-secondary);">Are you sure you want to submit? Your final version will be evaluated.</p>
-            <p style="color:var(--warning); font-size:13px; margin:12px 0;">This action cannot be undone.</p>
+            <p style="font-size:13px;color:var(--text-secondary);">Submit your current solution for evaluation.</p>
+            <p style="color:var(--warning);font-size:13px;margin:12px 0;">This action cannot be undone.</p>
             <div class="modal-footer">
                 <button class="btn btn-secondary" onclick="closeSubmitModal()">Cancel</button>
-                <button class="btn btn-danger" onclick="confirmSubmit()">Yes, Submit</button>
+                <button class="btn btn-primary" onclick="confirmSubmit()">Submit</button>
             </div>
         </div>
     </div>
+
     <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.js"></script>
     <script src="/static/js/api.js"></script>
     <script src="/static/js/ide.js"></script>
     <script>
-        function toggleIDESidebar() { document.getElementById('ideSidebar').classList.toggle('open'); }
-        function toggleIDEMode() {
+        if (!API.isLoggedIn() || API.role !== 'participant') window.location.href = '/login';
+        function logout() { API.clearAuth(); window.location.href = '/login'; }
+        function toggleSidebar() { document.getElementById('ideSidebar').classList.toggle('open'); document.getElementById('ideSidebar').classList.toggle('collapsed'); }
+        function toggleStdin() { document.getElementById('stdinArea').classList.toggle('collapsed'); }
+        function toggleTheme() {
             const current = document.documentElement.getAttribute('data-theme');
             const next = current === 'dark' ? 'light' : 'dark';
             document.documentElement.setAttribute('data-theme', next);
             localStorage.setItem('theme', next);
             if (typeof monaco !== 'undefined' && editor) monaco.editor.setTheme(next === 'dark' ? 'vs-dark' : 'vs');
-            updateIDEModeIcon(next);
+            updateThemeIcon(next);
         }
-        function updateIDEModeIcon(theme) {
-            const btn = document.getElementById('ideThemeToggle');
+        function updateThemeIcon(theme) {
+            const btn = document.getElementById('themeBtn');
             if (btn) btn.innerHTML = theme === 'dark' ? ICONS.sun : ICONS.moon;
         }
         document.addEventListener('DOMContentLoaded', function() {
             const theme = localStorage.getItem('theme') || 'dark';
             document.documentElement.setAttribute('data-theme', theme);
-            updateIDEModeIcon(theme);
+            updateThemeIcon(theme);
         });
     </script>
 </body>
