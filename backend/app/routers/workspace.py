@@ -7,7 +7,8 @@ from pydantic import BaseModel
 from app.database import get_db
 from app.security import get_participant_user
 from app.config import CHALLENGE_STORAGE_PATH, TEAM_WORKSPACE_PATH
-from app.utils import sanitize_path, compute_event_status
+from app.utils import sanitize_path
+from app.events import get_current_event, compute_event_status
 from datetime import datetime
 from typing import Optional
 
@@ -214,9 +215,8 @@ async def save_file(body: SaveFileRequest, user=Depends(get_participant_user)):
     db = get_db()
     team_code = user.get("sub")
 
-    settings = await db.event_settings.find_one({})
-    computed = compute_event_status(settings)
-    if computed == "COMPLETED":
+    cmps = compute_event_status(await get_current_event())
+    if cmps == "COMPLETED":
         raise HTTPException(status_code=403, detail="Event has ended. No more edits allowed.")
 
     alloc = await db.allocations.find_one({"team_code": team_code})
@@ -261,9 +261,8 @@ async def bulk_save_files(body: BulkSaveRequest, user=Depends(get_participant_us
     db = get_db()
     team_code = user.get("sub")
 
-    settings = await db.event_settings.find_one({})
-    computed = compute_event_status(settings)
-    if computed == "COMPLETED":
+    cmps = compute_event_status(await get_current_event())
+    if cmps == "COMPLETED":
         raise HTTPException(status_code=403, detail="Event has ended. No more edits allowed.")
 
     alloc = await db.allocations.find_one({"team_code": team_code})
@@ -314,9 +313,9 @@ async def get_code_details(user=Depends(get_participant_user)):
     team = await db.teams.find_one({"team_code": team_code})
     ch = await db.challenges.find_one({"challenge_code": challenge_code})
 
-    event_settings = await db.event_settings.find_one({})
-    event_start = event_settings.get("event_start_time") if event_settings else None
-    event_end = event_settings.get("event_end_time") if event_settings else None
+    event = await get_current_event()
+    event_start = event.get("event_start_time") if event else None
+    event_end = event.get("event_end_time") if event else None
 
     has_eval, eval_files = _has_evaluator(challenge_code)
 

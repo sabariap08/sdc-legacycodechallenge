@@ -2,7 +2,6 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from app.database import get_db
 from app.security import verify_password, create_token, hash_password, get_admin_user, get_participant_user
-from app.utils import compute_event_status
 from datetime import datetime
 
 router = APIRouter(prefix="/api/participant", tags=["participant"])
@@ -47,18 +46,6 @@ async def _authenticate_participant(team_code: str, password: str):
         blocked = await db.blocked_users.find_one({"email": p["email"].lower().strip()})
         if blocked:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Your account has been blocked. Contact the organizer.")
-
-    settings = await db.event_settings.find_one({})
-    computed = compute_event_status(settings) if settings else "DRAFT"
-    if computed == "ONGOING":
-        event_code = settings.get("event_code") if settings else None
-        if event_code:
-            checkin = await db.checkins.find_one({"team_code": team["team_code"], "event_code": event_code, "checked_in": True})
-            if not checkin:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Your team has not been checked in for the current event yet. Please wait for the event administrator to complete your check-in."
-                )
 
     token = create_token({
         "sub": team["team_code"],
@@ -119,23 +106,24 @@ async def participant_dashboard(user=Depends(get_participant_user)):
 
     allocation = await db.allocations.find_one({"team_code": team_code})
 
-    event_settings = await db.event_settings.find_one({})
-    computed = compute_event_status(event_settings)
+    from app.events import get_current_event, compute_event_status
+    event = await get_current_event()
+    computed = compute_event_status(event) if event else "NO_EVENT"
 
     now = datetime.utcnow()
     remaining_seconds = None
     countdown_seconds = None
-    if event_settings:
-        start = event_settings.get("event_start_time")
-        end = event_settings.get("event_end_time")
+    if event:
+        start = event.get("event_start_time")
+        end = event.get("event_end_time")
         if start:
             if isinstance(start, str):
-                start = datetime.fromisoformat(start.replace("Z", "+00:00")).replace(tzinfo=None)
+                start = datetime.fromisoformat(str(start).replace("Z", "+00:00")).replace(tzinfo=None)
             if computed == "UPCOMING":
                 countdown_seconds = max(0, int((start - now).total_seconds()))
             elif computed == "ONGOING" and end:
                 if isinstance(end, str):
-                    end = datetime.fromisoformat(end.replace("Z", "+00:00")).replace(tzinfo=None)
+                    end = datetime.fromisoformat(str(end).replace("Z", "+00:00")).replace(tzinfo=None)
                 remaining_seconds = max(0, int((end - now).total_seconds()))
 
     announcements = []
@@ -144,7 +132,7 @@ async def participant_dashboard(user=Depends(get_participant_user)):
         announcements.append(a)
 
     submission = await db.submissions.find_one(
-        {"team_code": team_code},
+        {"team_code": team_code, "event_id": event["event_id"]} if event else {"team_code": team_code},
         sort=[("submitted_at", -1)]
     )
     if submission:
@@ -167,8 +155,11 @@ async def participant_dashboard(user=Depends(get_participant_user)):
         "team_name": team.get("team_name"),
         "participants": participants,
         "event_status": computed,
-        "event_start_time": event_settings.get("event_start_time") if event_settings else None,
-        "event_end_time": event_settings.get("event_end_time") if event_settings else None,
+        "event_name": event.get("event_name") if event else None,
+        "event_code": event.get("event_code") if event else None,
+        "event_id": event.get("event_id") if event else None,
+        "event_start_time": event.get("event_start_time") if event else None,
+        "event_end_time": event.get("event_end_time") if event else None,
         "countdown_seconds": countdown_seconds,
         "remaining_seconds": remaining_seconds,
         "announcements": announcements,
@@ -178,33 +169,35 @@ async def participant_dashboard(user=Depends(get_participant_user)):
         },
         "challenge": challenge_info,
         "submission": submission,
-        "leaderboard_enabled": event_settings.get("leaderboard_enabled", False) if event_settings else False,
+        "leaderboard_enabled": (event.get("leaderboard_enabled", False) if event else False) if computed in ("ONGOING", "UPCOMING") else False,
     }
 
 
 @router.get("/event-countdown")
 async def participant_event_countdown(user=Depends(get_participant_user)):
     db = get_db()
-    event_settings = await db.event_settings.find_one({})
+    from app.events import get_current_event, compute_event_status
+    event = await get_current_event()
     now = datetime.utcnow()
-    computed = compute_event_status(event_settings)
+    computed = compute_event_status(event) if event else "NO_EVENT"
     countdown_seconds = None
     remaining_seconds = None
-    if event_settings:
-        start = event_settings.get("event_start_time")
-        end = event_settings.get("event_end_time")
+    if event:
+        start = event.get("event_start_time")
+        end = event.get("event_end_time")
         if start:
             if isinstance(start, str):
-                start = datetime.fromisoformat(start.replace("Z", "+00:00")).replace(tzinfo=None)
+                start = datetime.fromisoformat(str(start).replace("Z", "+00:00")).replace(tzinfo=None)
             if computed == "UPCOMING":
                 countdown_seconds = max(0, int((start - now).total_seconds()))
             elif computed == "ONGOING" and end:
                 if isinstance(end, str):
-                    end = datetime.fromisoformat(end.replace("Z", "+00:00")).replace(tzinfo=None)
+                    end = datetime.fromisoformat(str(end).replace("Z", "+00:00")).replace(tzinfo=None)
                 remaining_seconds = max(0, int((end - now).total_seconds()))
     return {
         "server_time": now.isoformat(),
         "status": computed,
+        "event_code": event.get("event_code") if event else None,
         "countdown_seconds": countdown_seconds,
         "remaining_seconds": remaining_seconds,
     }
@@ -213,14 +206,16 @@ async def participant_event_countdown(user=Depends(get_participant_user)):
 @router.get("/leaderboard")
 async def participant_leaderboard(user=Depends(get_participant_user)):
     db = get_db()
-    event_settings = await db.event_settings.find_one({})
-    if not event_settings or not event_settings.get("leaderboard_enabled"):
+    from app.events import get_current_event
+    event = await get_current_event()
+    if not event or not event.get("leaderboard_enabled") or event.get("status") == "CANCELLED":
         return {"leaderboard": [], "message": "Leaderboard not enabled yet"}
+    event_id = event["event_id"]
 
     entries = []
-    async for sub in db.submissions.find({"status": "evaluated"}).sort("score", -1):
+    async for sub in db.submissions.find({"status": "evaluated", "event_id": event_id}).sort("score", -1):
         team = await db.teams.find_one({"team_code": sub["team_code"]})
-        alloc = await db.allocations.find_one({"team_code": sub["team_code"]})
+        alloc = await db.allocations.find_one({"team_code": sub["team_code"], "event_id": event_id})
         entries.append({
             "team_code": sub["team_code"],
             "team_name": team["team_name"] if team else "",

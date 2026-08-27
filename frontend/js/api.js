@@ -87,6 +87,7 @@ const ICONS = {
     check: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>',
     x: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
     search: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>',
+    history: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v5h5"/><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8"/><polyline points="12 7 12 12 15 14"/></svg>',
 };
 
 function showError(elementId, message) {
@@ -178,11 +179,11 @@ function getAdminSidebar(currentPage) {
         { href: '/admin/dashboard', icon: 'dashboard', label: 'Dashboard', key: 'dashboard' },
         { href: '/admin/teams', icon: 'teams', label: 'Teams', key: 'teams' },
         { href: '/admin/users', icon: 'users', label: 'User Management', key: 'users' },
-        { href: '/admin/checkin', icon: 'checkSquare', label: 'Check-In', key: 'checkin' },
         { href: '/admin/challenges', icon: 'archive', label: 'Repositories', key: 'challenges' },
         { href: '/admin/submissions', icon: 'fileText', label: 'Submissions', key: 'submissions' },
         { href: '/admin/leaderboard', icon: 'trophy', label: 'Leaderboard', key: 'leaderboard' },
         { href: '/admin/event', icon: 'clock', label: 'Event Control', key: 'event' },
+        { href: '/admin/history', icon: 'history', label: 'Event History', key: 'history' },
         { href: '/admin/audit', icon: 'clipboard', label: 'Audit Logs', key: 'audit' },
     ];
     let html = '';

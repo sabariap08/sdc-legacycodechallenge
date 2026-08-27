@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from app.database import get_db
 from app.security import get_participant_user
 from app.config import TEAM_WORKSPACE_PATH, EVALUATOR_PATH
-from app.utils import compute_event_status
+from app.events import get_current_event, compute_event_status
 from datetime import datetime
 
 router = APIRouter(prefix="/api/submission", tags=["submission"])
@@ -16,8 +16,9 @@ async def submit_final(user=Depends(get_participant_user)):
     db = get_db()
     team_code = user.get("sub")
 
-    settings = await db.event_settings.find_one({})
-    computed = compute_event_status(settings)
+    event = await get_current_event()
+    computed = compute_event_status(event) if event else "DRAFT"
+    event_id = event["event_id"] if event else None
 
     if computed not in ("ONGOING", "COMPLETED"):
         raise HTTPException(status_code=403, detail="Event has not started yet")
@@ -33,7 +34,7 @@ async def submit_final(user=Depends(get_participant_user)):
         raise HTTPException(status_code=404, detail="Workspace not found")
 
     existing = await db.submissions.find_one(
-        {"team_code": team_code, "challenge_code": challenge_code},
+        {"team_code": team_code, "challenge_code": challenge_code, "event_id": event_id},
         sort=[("submitted_at", -1)]
     )
 
@@ -47,12 +48,12 @@ async def submit_final(user=Depends(get_participant_user)):
     submission_doc = {
         "team_code": team_code,
         "challenge_code": challenge_code,
+        "event_id": event_id,
         "submitted_at": datetime.utcnow(),
         "status": "evaluated",
         "score": score,
         "total": total,
         "evaluation_result": evaluation_result,
-        "version": 1,
         "auto_submitted": False,
     }
 
@@ -61,7 +62,7 @@ async def submit_final(user=Depends(get_participant_user)):
     await db.audit_logs.insert_one({
         "action": "submission",
         "actor": team_code,
-        "details": f"Score: {score}/{total} (v1)",
+        "details": f"Score: {score}/{total}",
         "timestamp": datetime.utcnow()
     })
 
@@ -69,7 +70,6 @@ async def submit_final(user=Depends(get_participant_user)):
         "message": "Submission evaluated",
         "score": score,
         "total": total,
-        "version": 1,
         "results": evaluation_result.get("results", [])
     }
 
@@ -85,8 +85,11 @@ async def auto_submit(user=Depends(get_participant_user)):
     challenge_code = alloc["challenge_code"]
     workspace = os.path.join(os.path.abspath(TEAM_WORKSPACE_PATH), team_code, challenge_code)
 
+    event = await get_current_event()
+    event_id = event["event_id"] if event else None
+
     existing = await db.submissions.find_one(
-        {"team_code": team_code, "challenge_code": challenge_code},
+        {"team_code": team_code, "challenge_code": challenge_code, "event_id": event_id},
         sort=[("submitted_at", -1)]
     )
 
@@ -103,12 +106,12 @@ async def auto_submit(user=Depends(get_participant_user)):
     submission_doc = {
         "team_code": team_code,
         "challenge_code": challenge_code,
+        "event_id": event_id,
         "submitted_at": datetime.utcnow(),
         "status": "evaluated",
         "score": score,
         "total": total,
         "evaluation_result": evaluation_result,
-        "version": 1,
         "auto_submitted": True,
     }
 
@@ -127,22 +130,22 @@ async def auto_submit(user=Depends(get_participant_user)):
 async def submission_status(user=Depends(get_participant_user)):
     db = get_db()
     team_code = user.get("sub")
+    event = await get_current_event()
+    event_id = event["event_id"] if event else None
     sub = await db.submissions.find_one(
-        {"team_code": team_code},
+        {"team_code": team_code, "event_id": event_id} if event_id else {"team_code": team_code},
         sort=[("submitted_at", -1)]
     )
     if not sub:
         return {"submitted": False}
 
-    settings = await db.event_settings.find_one({})
-    computed = compute_event_status(settings)
+    computed = compute_event_status(event) if event else "DRAFT"
 
     return {
         "submitted": True,
         "score": sub.get("score", 0),
         "total": sub.get("total", 0),
         "submitted_at": sub.get("submitted_at"),
-        "version": sub.get("version", 1),
         "auto_submitted": sub.get("auto_submitted", False),
         "results": sub.get("evaluation_result", {}).get("results", []),
         "event_status": computed,

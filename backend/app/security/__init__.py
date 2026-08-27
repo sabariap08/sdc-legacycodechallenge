@@ -59,16 +59,4 @@ async def get_participant_user(credentials: HTTPAuthorizationCredentials = Depen
             blocked = await db.blocked_users.find_one({"email": p["email"].lower().strip()})
             if blocked:
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Your account has been blocked. Contact the organizer.")
-        settings = await db.event_settings.find_one({})
-        from app.utils import compute_event_status
-        computed = compute_event_status(settings) if settings else "DRAFT"
-        if computed == "ONGOING":
-            event_code = settings.get("event_code") if settings else None
-            if event_code:
-                checkin = await db.checkins.find_one({"team_code": team_code, "event_code": event_code, "checked_in": True})
-                if not checkin:
-                    raise HTTPException(
-                        status_code=status.HTTP_403_FORBIDDEN,
-                        detail="Your team has not been checked in for the current event yet. Please wait for the event administrator to complete your check-in."
-                    )
     return payload

@@ -28,7 +28,7 @@
     <script>
         if (!API.isLoggedIn() || API.role !== 'admin') { window.location.href = '/login'; }
         function logout() { API.clearAuth(); window.location.href = '/login'; }
-        document.body.innerHTML = renderAdminLayout('event', 'Event History');
+        document.body.innerHTML = renderAdminLayout('history', 'Event History');
         initTheme();
         document.getElementById('pageContent').innerHTML = `
             <div class="page-header with-actions">
@@ -60,7 +60,7 @@
                     el.innerHTML = '<div class="empty-state"><div class="empty-icon">' + ICONS.clipboard + '</div><h3>No Event History</h3><p>Event records will appear here after events are restarted or completed.</p></div>';
                     return;
                 }
-                let tableHtml = '<div class="card"><div class="table-container history-table-wrap"><table><thead><tr><th>Unique Code</th><th>Start</th><th>End</th><th>Duration</th><th>Status</th><th>Archived</th></tr></thead><tbody>';
+                let tableHtml = '<div class="card"><div class="table-container history-table-wrap"><table><thead><tr><th>Unique Code</th><th>Event</th><th>Start</th><th>End</th><th>Duration</th><th>Status</th><th>Archived</th></tr></thead><tbody>';
                 let cardsHtml = '';
                 for (const h of data.history) {
                     const status = (h.status || 'unknown').toLowerCase();
@@ -70,6 +70,7 @@
                     const durStr = durH > 0 ? durH + 'h' + (durM > 0 ? ' ' + durM + 'm' : '') : durM + 'm';
                     tableHtml += '<tr>';
                     tableHtml += '<td><span class="event-code-cell">' + escapeHtml(h.event_code || '-') + '</span></td>';
+                    tableHtml += '<td>' + escapeHtml(h.event_name || '-') + '</td>';
                     tableHtml += '<td>' + formatDateLocal(h.event_start_time) + '</td>';
                     tableHtml += '<td>' + formatDateLocal(h.event_end_time) + '</td>';
                     tableHtml += '<td>' + durStr + '</td>';
@@ -78,6 +79,7 @@
                     tableHtml += '</tr>';
                     cardsHtml += '<div class="history-card-mobile">';
                     cardsHtml += '<div class="card-row"><span class="card-label">Code</span><span class="card-value event-code-cell">' + escapeHtml(h.event_code || '-') + '</span></div>';
+                    cardsHtml += '<div class="card-row"><span class="card-label">Event</span><span class="card-value">' + escapeHtml(h.event_name || '-') + '</span></div>';
                     cardsHtml += '<div class="card-row"><span class="card-label">Start</span><span class="card-value">' + formatDateLocal(h.event_start_time) + '</span></div>';
                     cardsHtml += '<div class="card-row"><span class="card-label">End</span><span class="card-value">' + formatDateLocal(h.event_end_time) + '</span></div>';
                     cardsHtml += '<div class="card-row"><span class="card-label">Duration</span><span class="card-value">' + durStr + '</span></div>';

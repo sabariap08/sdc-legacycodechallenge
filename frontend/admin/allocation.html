@@ -23,10 +23,10 @@
         initTheme();
         document.getElementById('pageContent').innerHTML = `
             <div class="page-header with-actions">
-                <div><h1>Challenge Allocation</h1><p>Generate and manage challenge allocations</p></div>
+                <div><h1>Challenge Allocation</h1><p>Generate, balance and manage challenge allocations</p></div>
                 <div style="display:flex; gap:8px;">
                     <button class="btn btn-primary" onclick="generateAllocation()" id="generateBtn">${ICONS.target} Generate</button>
-                    <button class="btn btn-success" onclick="releaseAllocation()" id="releaseBtn" disabled>${ICONS.play} Release</button>
+                    <button class="btn btn-danger" onclick="resetAllocation()" id="resetBtn" disabled>${ICONS.ban} Reset</button>
                 </div>
             </div>
             <div class="alloc-state" id="allocState"></div>
@@ -77,31 +77,31 @@
 
         async function generateAllocation() {
             hideError('error-msg'); hideSuccess('success-msg');
-            showModal('Generate Allocation', 'This will replace all existing allocations. Continue?', async () => {
+            showModal('Generate Allocation', 'This will replace all existing allocations with a fresh, balanced random assignment and release them to teams. Continue?', async () => {
                 const btn = document.getElementById('generateBtn');
                 btn.disabled = true; btn.innerHTML = '<span class="loading-spinner"></span>';
                 try {
                     const resp = await API.post('/api/admin/allocation/generate', {});
                     const data = await resp.json();
-                    if (resp.ok) { showSuccess('success-msg', `Allocation generated for ${data.allocations.length} teams`); loadAllocations(); }
+                    if (resp.ok) { showSuccess('success-msg', `Allocation generated and released for ${data.allocations.length} teams`); loadAllocations(); }
                     else { showError('error-msg', data.detail || 'Failed'); }
                 } catch (err) { showError('error-msg', err.message); }
                 btn.disabled = false; btn.innerHTML = ICONS.target + ' Generate';
             });
         }
 
-        async function releaseAllocation() {
+        async function resetAllocation() {
             hideError('error-msg'); hideSuccess('success-msg');
-            showModal('Release Allocation', 'Teams will be able to see their assigned challenges. Continue?', async () => {
-                const btn = document.getElementById('releaseBtn');
+            showModal('Reset Allocation', 'All allocations will be removed. Continue?', async () => {
+                const btn = document.getElementById('resetBtn');
                 btn.disabled = true; btn.innerHTML = '<span class="loading-spinner"></span>';
                 try {
-                    const resp = await API.post('/api/admin/allocation/release', {});
+                    const resp = await API.post('/api/admin/allocation/reset', {});
                     const data = await resp.json();
-                    if (resp.ok) { showSuccess('success-msg', `Released ${data.count} allocations`); loadAllocations(); }
+                    if (resp.ok) { showSuccess('success-msg', 'Allocations reset'); loadAllocations(); }
                     else { showError('error-msg', data.detail || 'Failed'); }
                 } catch (err) { showError('error-msg', err.message); }
-                btn.disabled = false; btn.innerHTML = ICONS.play + ' Release';
+                btn.disabled = false; btn.innerHTML = ICONS.ban + ' Reset';
             });
         }
 
@@ -122,16 +122,25 @@
             const data = await resp.json();
             const state = data.allocation_state || 'PENDING';
             renderState(state);
-            document.getElementById('generateBtn').disabled = eventLocked || state === 'RELEASED';
-            document.getElementById('releaseBtn').disabled = eventLocked || state !== 'GENERATED';
+            document.getElementById('generateBtn').disabled = eventLocked;
+            document.getElementById('resetBtn').disabled = eventLocked || data.allocations.length === 0;
             if (data.allocations.length === 0) {
-                document.getElementById('allocationContent').innerHTML = '<div class="empty-state"><div class="empty-icon">' + ICONS.inbox + '</div><h3>No allocations yet</h3><p>Click "Generate" to assign challenges to teams</p></div>';
+                document.getElementById('allocationContent').innerHTML = '<div class="empty-state"><div class="empty-icon">' + ICONS.inbox + '</div><h3>No allocations yet</h3><p>Click "Generate" to assign challenges to teams with a balanced random distribution</p></div>';
                 return;
             }
+            // Build a team bin lookup
+            let teamBins = {};
+            try {
+                const teamsResp = await API.get('/api/admin/teams');
+                if (teamsResp) {
+                    const teamsData = await teamsResp.json();
+                    for (const t of (teamsData.teams || [])) teamBins[t.team_code] = t.bin_number || '';
+                }
+            } catch (e) {}
             let html = '<div class="table-container"><table><thead><tr><th>Team Code</th><th>Challenge</th><th>Bin</th><th>State</th><th>Allocated At</th></tr></thead><tbody>';
             for (const a of data.allocations) {
                 const stateLabel = a.released ? '<span class="badge badge-success">Released</span>' : '<span class="badge badge-warning">Generated</span>';
-                html += `<tr><td><strong class="font-mono">${escapeHtml(a.team_code)}</strong></td><td><span class="badge badge-info">${escapeHtml(a.challenge_code)}</span></td><td>${escapeHtml(a.bin_number)}</td><td>${stateLabel}</td><td>${formatDate(a.allocated_at)}</td></tr>`;
+                html += `<tr><td><strong class="font-mono">${escapeHtml(a.team_code)}</strong></td><td><span class="badge badge-info">${escapeHtml(a.challenge_code)}</span></td><td>${escapeHtml(teamBins[a.team_code] || '-')}</td><td>${stateLabel}</td><td>${formatDate(a.allocated_at)}</td></tr>`;
             }
             html += '</tbody></table></div>';
             document.getElementById('allocationContent').innerHTML = html;

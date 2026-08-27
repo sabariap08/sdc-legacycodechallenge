@@ -258,6 +258,27 @@
                 </div>`;
         }
 
+        /* ==================== NO EVENT / CANCELLED ==================== */
+        function renderNoEvent(teamName, teamCode, cancelled) {
+            document.body.innerHTML = generateParticles(30) + `
+                <div style="position:fixed;top:16px;right:16px;z-index:100;animation:fadeIn .8s ease 1s both;">
+                    <button class="btn btn-secondary" onclick="logout()" style="font-size:12px;border-radius:var(--radius-full);backdrop-filter:blur(8px);">${ICONS.logout} Logout</button>
+                </div>
+                <div class="upcoming-scene">
+                    <div class="orbit-container">
+                        <div class="orbit-ring"></div>
+                        <div class="orbit-ring" style="border-color:var(--danger);"></div>
+                        <div class="orbit-core" style="background:linear-gradient(135deg,var(--text-muted),var(--danger));">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                        </div>
+                    </div>
+                    <div class="upcoming-title" style="font-size:clamp(26px,5vw,44px);">${cancelled ? 'Event Cancelled' : 'No Active Event'}</div>
+                    <div class="upcoming-tagline">${cancelled ? 'This event has been cancelled by the organizers.' : 'There is no active event right now. Please check back later.'}<span class="blink-cursor"></span></div>
+                    <div class="team-badge-upcoming"><span class="dot" style="background:${cancelled ? 'var(--danger)' : 'var(--warning)'};"></span>${escapeHtml(teamName)} &middot; <strong>${escapeHtml(teamCode)}</strong></div>
+                    <div class="upcoming-cta"><button class="btn" disabled style="cursor:default;">Awaiting Event</button></div>
+                </div>`;
+        }
+
         /* ==================== ONGOING DASHBOARD ==================== */
         let tcAccepted = false;
 
@@ -496,7 +517,11 @@
                 if (!resp) return;
                 const data = await resp.json();
                 const status = data.event_status;
-                if (status === 'UPCOMING') {
+                if (status === 'NO_EVENT') {
+                    renderNoEvent(data.team_name, data.team_code, false);
+                } else if (status === 'CANCELLED') {
+                    renderNoEvent(data.team_name, data.team_code, true);
+                } else if (status === 'UPCOMING') {
                     renderUpcoming(data.team_name, data.team_code, data.countdown_seconds || 0);
                 } else if (status === 'COMPLETED') {
                     renderCompleted(data.team_name, data.team_code, data.submission);

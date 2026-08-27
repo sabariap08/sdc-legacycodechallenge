@@ -3,7 +3,7 @@ from pydantic import BaseModel, EmailStr
 from typing import Optional, List
 from app.database import get_db
 from app.security import get_admin_user, verify_password, create_token, hash_password
-from app.utils import generate_team_code, generate_bin_number, compute_event_status, generate_event_code
+from app.utils import generate_team_code, generate_bin_number, compute_event_status
 from app.config import CHALLENGE_STORAGE_PATH
 from app.storage import save_files_to_db, get_file_tree_from_db, get_file_content_from_db, delete_files_from_db
 from datetime import datetime
@@ -212,9 +212,8 @@ async def delete_team(team_code: str, admin=Depends(get_admin_user)):
     await db.teams.delete_one({"team_code": team_code})
     await db.participants.delete_many({"team_code": team_code})
     await db.team_auth.delete_one({"team_code": team_code})
-    await db.allocations.delete_one({"team_code": team_code})
-    await db.submissions.delete_one({"team_code": team_code})
-    await db.checkins.delete_many({"team_code": team_code})
+    await db.allocations.delete_many({"team_code": team_code})
+    await db.submissions.delete_many({"team_code": team_code})
     await db.blocked_users.delete_many({"team_code": team_code})
 
     await db.audit_logs.insert_one({
@@ -436,35 +435,100 @@ async def import_repositories(body: ImportRequest, admin=Depends(get_admin_user)
 
             url = ch.repository_url.strip()
             if not (url.endswith(".git") or "github.com" in url or "gitlab.com" in url or "bitbucket.org" in url):
-                results.append({"challenge_code": challenge_code, "status": "FAILED", "error": "Invalid repository URL"})
+                results.append({"challenge_code": challenge_code, "status": "FAILED", "error": "Invalid repository URL. Use a GitHub/GitLab/Bitbucket URL."})
                 continue
 
             storage_path = _get_challenge_storage_path(challenge_code)
             if os.path.exists(storage_path):
                 shutil.rmtree(storage_path)
-
             os.makedirs(storage_path, exist_ok=True)
 
-            result = subprocess.run(
-                ["git", "clone", "--depth", "1", url, storage_path],
-                capture_output=True, text=True, timeout=120
-            )
+            commit_sha = "unknown"
+            source = "link"
 
-            if result.returncode != 0:
-                results.append({"challenge_code": challenge_code, "status": "FAILED", "error": result.stderr.strip()})
-                continue
-
-            sha_result = subprocess.run(
-                ["git", "-C", storage_path, "rev-parse", "HEAD"],
-                capture_output=True, text=True
-            )
-            commit_sha = sha_result.stdout.strip() if sha_result.returncode == 0 else "unknown"
+            if "github.com" in url:
+                # Prefer GitHub codeload archive download (no git binary required, reliable on hosted platforms)
+                try:
+                    import httpx
+                    normalized = url.rstrip("/")
+                    if normalized.endswith(".git"):
+                        normalized = normalized[:-4]
+                    archive_url = normalized.rstrip("/") + "/archive/refs/heads/main.zip"
+                    with httpx.Client(timeout=120, follow_redirects=True) as c:
+                        r = c.get(archive_url)
+                        if r.status_code != 200:
+                            archive_url = normalized.rstrip("/") + "/archive/refs/heads/master.zip"
+                            r = c.get(archive_url)
+                        if r.status_code != 200:
+                            raise HTTPException(status_code=400, detail=f"Could not fetch default branch: HTTP {r.status_code}")
+                        content = r.content
+                    with zipfile.ZipFile(io.BytesIO(content), 'r') as zf:
+                        topdir = None
+                        for info in zf.infolist():
+                            if info.is_dir():
+                                topdir = info.filename.rstrip("/")
+                                break
+                        if topdir:
+                            for info in zf.infolist():
+                                if info.is_dir():
+                                    continue
+                                if not info.filename.startswith(topdir + "/"):
+                                    continue
+                                rel = info.filename[len(topdir) + 1:]
+                                if not rel:
+                                    continue
+                                target = os.path.join(storage_path, rel)
+                                os.makedirs(os.path.dirname(target), exist_ok=True)
+                                with open(target, "wb") as out:
+                                    out.write(zf.read(info))
+                        else:
+                            zf.extractall(storage_path)
+                    commit_sha = "github-archive"
+                    source = "link"
+                except Exception as e:
+                    # Fall back to git clone
+                    clone_ok = False
+                    try:
+                        result = subprocess.run(
+                            ["git", "clone", "--depth", "1", url, storage_path],
+                            capture_output=True, text=True, timeout=120
+                        )
+                        if result.returncode == 0:
+                            clone_ok = True
+                        else:
+                            results.append({"challenge_code": challenge_code, "status": "FAILED", "error": f"Git clone failed: {result.stderr.strip()}"})
+                            continue
+                    except subprocess.TimeoutExpired:
+                        results.append({"challenge_code": challenge_code, "status": "FAILED", "error": "Git clone timed out"})
+                        continue
+                    except Exception as e2:
+                        results.append({"challenge_code": challenge_code, "status": "FAILED", "error": f"Git unavailable: {e2}"})
+                        continue
+                    if clone_ok:
+                        sha_result = subprocess.run(
+                            ["git", "-C", storage_path, "rev-parse", "HEAD"],
+                            capture_output=True, text=True
+                        )
+                        commit_sha = sha_result.stdout.strip() if sha_result.returncode == 0 else "unknown"
+            else:
+                # Non-GitHub: use git clone
+                try:
+                    result = subprocess.run(
+                        ["git", "clone", "--depth", "1", url, storage_path],
+                        capture_output=True, text=True, timeout=120
+                    )
+                    if result.returncode != 0:
+                        results.append({"challenge_code": challenge_code, "status": "FAILED", "error": result.stderr.strip()})
+                        continue
+                except subprocess.TimeoutExpired:
+                    results.append({"challenge_code": challenge_code, "status": "FAILED", "error": "Clone timed out"})
+                    continue
 
             existing = await db.challenges.find_one({"challenge_code": challenge_code})
             challenge_doc = {
                 "challenge_code": challenge_code,
                 "challenge_name": challenge_code,
-                "repository_source": "link",
+                "repository_source": source,
                 "repository_url": url,
                 "language": "auto",
                 "difficulty": "medium",
@@ -716,38 +780,34 @@ async def get_repo_file(challenge_code: str, path: str, admin=Depends(get_admin_
 # ALLOCATION
 # ─────────────────────────────────────────────
 
-def _get_event_status(settings) -> str:
-    return compute_event_status(settings) if settings else "DRAFT"
-
-
 # ─────────────────────────────────────────────
 # EVENT CONTROL
 # ─────────────────────────────────────────────
 
 @router.get("/event/current")
 async def get_current_event(admin=Depends(get_admin_user)):
-    db = get_db()
-    settings = await db.event_settings.find_one({})
-    if not settings:
+    from app.events import get_current_event as _get_current, compute_current_status
+    current = await _get_current()
+    if not current:
         return {"event": None, "computed_status": "DRAFT"}
-    settings["_id"] = str(settings["_id"])
-    computed_status = compute_event_status(settings)
+    current["_id"] = str(current["_id"])
+    computed_status, _ = await compute_current_status()
     now = datetime.utcnow()
-    start = settings.get("event_start_time")
-    end = settings.get("event_end_time")
+    start = current.get("event_start_time")
+    end = current.get("event_end_time")
     remaining_seconds = None
     countdown_seconds = None
     if start:
         if isinstance(start, str):
-            start = datetime.fromisoformat(start.replace("Z", "+00:00")).replace(tzinfo=None)
+            start = datetime.fromisoformat(str(start).replace("Z", "+00:00")).replace(tzinfo=None)
         if computed_status == "UPCOMING":
             countdown_seconds = max(0, int((start - now).total_seconds()))
         elif computed_status == "ONGOING" and end:
             if isinstance(end, str):
-                end = datetime.fromisoformat(end.replace("Z", "+00:00")).replace(tzinfo=None)
+                end = datetime.fromisoformat(str(end).replace("Z", "+00:00")).replace(tzinfo=None)
             remaining_seconds = max(0, int((end - now).total_seconds()))
     return {
-        "event": settings,
+        "event": current,
         "computed_status": computed_status,
         "countdown_seconds": countdown_seconds,
         "remaining_seconds": remaining_seconds,
@@ -763,6 +823,18 @@ class EventStart(BaseModel):
     event_start_time: str
     event_end_time: str
     event_duration_minutes: int = 300
+    event_name: Optional[str] = "Legacy Code Rescue"
+
+
+def _parse_event_times(start_str: str, end_str: str):
+    try:
+        start_dt = datetime.fromisoformat(start_str.replace("Z", "+00:00")).replace(tzinfo=None)
+        end_dt = datetime.fromisoformat(end_str.replace("Z", "+00:00")).replace(tzinfo=None)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date format")
+    if end_dt <= start_dt:
+        raise HTTPException(status_code=400, detail="End time must be after start time")
+    return start_dt, end_dt
 
 
 @router.post("/event/start")
@@ -778,130 +850,165 @@ async def start_event(body: EventStart, admin=Depends(get_admin_user)):
     if body.event_duration_minutes < 5 or body.event_duration_minutes > 1440:
         raise HTTPException(status_code=400, detail="Duration must be between 5 and 1440 minutes")
 
-    existing = await db.event_settings.find_one({})
-    old_status = compute_event_status(existing) if existing else "DRAFT"
-    event_code = generate_event_code()
-
-    event_doc = {
-        "event_code": event_code,
-        "event_start_time": start_dt,
-        "event_end_time": end_dt,
-        "event_duration_minutes": body.event_duration_minutes,
-        "leaderboard_enabled": False,
-        "created_at": datetime.utcnow(),
-        "updated_at": datetime.utcnow(),
-        "created_by": admin.get("sub", "admin"),
-    }
+    from app.events import get_current_event as _get_current, create_event
+    existing = await _get_current()
 
     if existing:
-        if old_status in ("ONGOING", "UPCOMING"):
-            raise HTTPException(status_code=400, detail="Cannot start a new event while one is active or upcoming. Restart the current event first.")
-        await db.event_settings.update_one({}, {"$set": event_doc})
+        old_status = compute_event_status(existing)
+        if old_status in ("ONGOING", "UPCOMING", "CANCELLED"):
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot start a new event while one is active, upcoming, or cancelled. Archive the current event first (Start a New Event)."
+            )
+        await db.events.update_one(
+            {"event_id": existing["event_id"]},
+            {"$set": {
+                "event_start_time": start_dt,
+                "event_end_time": end_dt,
+                "event_duration_minutes": body.event_duration_minutes,
+                "event_name": (body.event_name or "Legacy Code Rescue").strip(),
+                "status": "UPCOMING",
+                "updated_at": datetime.utcnow(),
+                "created_by": admin.get("sub", "admin"),
+            }}
+        )
+        event = await _get_current()
+        event_code = event["event_code"]
     else:
-        await db.event_settings.insert_one(event_doc)
+        event = await create_event(event_name=body.event_name or "Legacy Code Rescue",
+                                   duration_minutes=body.event_duration_minutes)
+        await db.events.update_one(
+            {"event_id": event["event_id"]},
+            {"$set": {
+                "event_start_time": start_dt,
+                "event_end_time": end_dt,
+                "status": "UPCOMING",
+                "created_by": admin.get("sub", "admin"),
+                "updated_at": datetime.utcnow(),
+            }}
+        )
+        event = await _get_current()
+        event_code = event["event_code"]
 
     await db.audit_logs.insert_one({
         "action": "event_started",
         "actor": admin.get("sub", "admin"),
-        "details": f"New event {event_code} started. Previous status: {old_status}. Start: {start_dt.isoformat()}, End: {end_dt.isoformat()}",
+        "details": f"Event {event_code} scheduled. Start: {start_dt.isoformat()}, End: {end_dt.isoformat()}",
         "timestamp": datetime.utcnow()
     })
 
-    return {"message": "Event started", "event_code": event_code, "event_start_time": start_dt.isoformat(), "event_end_time": end_dt.isoformat()}
+    return {"message": "Event scheduled", "event_code": event_code, "event_start_time": start_dt.isoformat(), "event_end_time": end_dt.isoformat()}
 
 
-async def _archive_current_event(db, actor: str, action: str):
-    current = await db.event_settings.find_one({})
-    if current and current.get("event_code"):
-        computed = compute_event_status(current)
-        history_doc = {
-            "event_code": current.get("event_code", ""),
-            "event_start_time": current.get("event_start_time"),
-            "event_end_time": current.get("event_end_time"),
-            "event_duration_minutes": current.get("event_duration_minutes", 300),
-            "status": computed,
-            "archived_at": datetime.utcnow(),
-            "archived_by": actor,
-            "action": action,
-        }
-        await db.event_history.insert_one(history_doc)
-
-
-class EventRestart(BaseModel):
-    confirm: bool = False
-    event_start_time: str
-    event_end_time: str
-    event_duration_minutes: int = 300
-
-
-@router.post("/event/restart")
-async def restart_event(body: EventRestart, admin=Depends(get_admin_user)):
-    if not body.confirm:
-        raise HTTPException(status_code=400, detail="Must confirm restart")
-
+@router.post("/event/new")
+async def create_new_event(body: dict, admin=Depends(get_admin_user)):
+    """Start a New Event: archive the current one (clearing its per-event data),
+    then create a fresh event with a brand-new unique code."""
+    from app.events import get_current_event as _get_current, archive_current_event, create_event
     db = get_db()
-    try:
-        start_dt = datetime.fromisoformat(body.event_start_time.replace("Z", "+00:00")).replace(tzinfo=None)
-        end_dt = datetime.fromisoformat(body.event_end_time.replace("Z", "+00:00")).replace(tzinfo=None)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid date format")
-    if end_dt <= start_dt:
-        raise HTTPException(status_code=400, detail="End time must be after start time")
-    if body.event_duration_minutes < 5 or body.event_duration_minutes > 1440:
-        raise HTTPException(status_code=400, detail="Duration must be between 5 and 1440 minutes")
 
-    existing = await db.event_settings.find_one({})
-    old_status = compute_event_status(existing) if existing else "DRAFT"
+    current = await _get_current()
+    if current and compute_event_status(current) in ("ONGOING", "UPCOMING"):
+        reason = body.get("reason") or "New event started by admin"
+        await archive_current_event(reason)
 
-    await _archive_current_event(db, admin.get("sub", "admin"), "event_restarted")
+    event_name = (body.get("event_name") or "Legacy Code Rescue").strip()
+    duration = body.get("event_duration_minutes") or 300
 
-    await db.allocations.delete_many({})
-    await db.submissions.delete_many({})
-    await db.checkins.delete_many({})
+    start_str = body.get("event_start_time")
+    end_str = body.get("event_end_time")
 
-    new_event_code = generate_event_code()
-    new_settings = {
-        "event_code": new_event_code,
-        "event_start_time": start_dt,
-        "event_end_time": end_dt,
-        "event_duration_minutes": body.event_duration_minutes,
-        "leaderboard_enabled": False,
-        "created_at": datetime.utcnow(),
-        "updated_at": datetime.utcnow(),
-        "created_by": admin.get("sub", "admin"),
-    }
+    new_event = await create_event(event_name=event_name, duration_minutes=duration)
 
-    if existing:
-        await db.event_settings.update_one({}, {"$set": new_settings})
-    else:
-        await db.event_settings.insert_one(new_settings)
+    if start_str and end_str:
+        try:
+            start_dt, end_dt = _parse_event_times(start_str, end_str)
+            await db.events.update_one(
+                {"event_id": new_event["event_id"]},
+                {"$set": {"event_start_time": start_dt, "event_end_time": end_dt, "status": "UPCOMING"}}
+            )
+        except HTTPException:
+            await db.events.update_one({"event_id": new_event["event_id"]}, {"$set": {"status": "UPCOMING"}})
 
     await db.audit_logs.insert_one({
-        "action": "event_restarted",
+        "action": "event_created",
         "actor": admin.get("sub", "admin"),
-        "details": f"Event restarted from status {old_status}. New code: {new_event_code}. Allocations, submissions, workspaces, and checkins cleared.",
+        "details": f"New event created with code {new_event['event_code']}",
         "timestamp": datetime.utcnow()
     })
 
-    return {"message": "Event restarted successfully", "new_event_code": new_event_code, "event_start_time": start_dt.isoformat(), "event_end_time": end_dt.isoformat()}
+    return {"message": "New event created", "event_code": new_event["event_code"], "event_id": new_event["event_id"]}
+
+
+class EventDelete(BaseModel):
+    confirm: bool = False
+    reason: Optional[str] = "Event deleted"
+
+
+@router.post("/event/delete")
+async def delete_current_event(body: EventDelete, admin=Depends(get_admin_user)):
+    """Delete the current event: archive it to history and mark it deleted."""
+    if not body.confirm:
+        raise HTTPException(status_code=400, detail="Must confirm deletion")
+    from app.events import get_current_event as _get_current, archive_current_event
+    db = get_db()
+    current = await _get_current()
+    if not current:
+        raise HTTPException(status_code=404, detail="No active event to delete")
+    archived = await archive_current_event(body.reason or "Event deleted by admin")
+    # Clean up event-scoped data so the system is fresh
+    event_id = current.get("event_id")
+    await db.allocations.delete_many({"event_id": event_id})
+    await db.submissions.delete_many({"event_id": event_id})
+    await db.audit_logs.insert_one({
+        "action": "event_deleted",
+        "actor": admin.get("sub", "admin"),
+        "details": f"Event {current.get('event_code')} deleted. Reason: {body.reason}",
+        "timestamp": datetime.utcnow()
+    })
+    return {"message": "Event deleted", "event_code": current.get("event_code")}
+
+
+@router.post("/event/cancel")
+async def cancel_current_event(body: dict, admin=Depends(get_admin_user)):
+    """Cancel the current event (status -> CANCELLED) without deleting it."""
+    from app.events import get_current_event as _get_current, cancel_current_event
+    db = get_db()
+    current = await _get_current()
+    if not current:
+        raise HTTPException(status_code=404, detail="No active event to cancel")
+    reason = body.get("reason") or "Cancelled by admin"
+    await cancel_current_event(reason)
+    await db.audit_logs.insert_one({
+        "action": "event_cancelled",
+        "actor": admin.get("sub", "admin"),
+        "details": f"Event {current.get('event_code')} cancelled. Reason: {reason}",
+        "timestamp": datetime.utcnow()
+    })
+    return {"message": "Event cancelled", "event_code": current.get("event_code")}
 
 
 class EventUpdate(BaseModel):
     event_start_time: Optional[str] = None
     event_end_time: Optional[str] = None
     event_duration_minutes: Optional[int] = None
+    event_name: Optional[str] = None
+    leaderboard_enabled: Optional[bool] = None
 
 
 @router.put("/event/current")
 async def update_current_event(body: EventUpdate, admin=Depends(get_admin_user)):
+    from app.events import get_current_event as _get_current
     db = get_db()
-    settings = await db.event_settings.find_one({})
-    if not settings:
+    event = await _get_current()
+    if not event:
         raise HTTPException(status_code=404, detail="No event configured")
 
-    computed = compute_event_status(settings)
+    computed = compute_event_status(event)
     if computed == "COMPLETED":
         raise HTTPException(status_code=400, detail="Cannot modify a completed event. Start a new event instead.")
+    if computed == "CANCELLED":
+        raise HTTPException(status_code=400, detail="Cannot modify a cancelled event. Start a new event instead.")
 
     update = {}
     if body.event_start_time is not None:
@@ -918,33 +1025,30 @@ async def update_current_event(body: EventUpdate, admin=Depends(get_admin_user))
         if body.event_duration_minutes < 5 or body.event_duration_minutes > 1440:
             raise HTTPException(status_code=400, detail="Duration must be between 5 and 1440 minutes")
         update["event_duration_minutes"] = body.event_duration_minutes
+    if body.event_name is not None:
+        if body.event_name.strip():
+            update["event_name"] = body.event_name.strip()
+    if body.leaderboard_enabled is not None:
+        update["leaderboard_enabled"] = body.leaderboard_enabled
 
     if not update:
         raise HTTPException(status_code=400, detail="No settings provided")
 
-    if computed == "ONGOING" and "event_start_time" in update:
-        existing_start = settings.get("event_start_time")
-        if isinstance(existing_start, str):
-            existing_start = datetime.fromisoformat(existing_start.replace("Z", "+00:00")).replace(tzinfo=None)
-        new_start = update["event_start_time"]
-        if existing_start and new_start and existing_start != new_start:
-            raise HTTPException(status_code=400, detail="Start date cannot be modified after the event has started.")
-
     if "event_start_time" in update or "event_end_time" in update:
-        existing_start = settings.get("event_start_time")
-        existing_end = settings.get("event_end_time")
+        existing_start = event.get("event_start_time")
+        existing_end = event.get("event_end_time")
         if isinstance(existing_start, str):
             existing_start = datetime.fromisoformat(existing_start.replace("Z", "+00:00")).replace(tzinfo=None)
         if isinstance(existing_end, str):
             existing_end = datetime.fromisoformat(existing_end.replace("Z", "+00:00")).replace(tzinfo=None)
         s = update.get("event_start_time", existing_start)
         e = update.get("event_end_time", existing_end)
-        if s and e and hasattr(s, 'replace') and hasattr(e, 'replace'):
+        if s and e:
             if e <= s:
                 raise HTTPException(status_code=400, detail="End time must be after start time")
 
     update["updated_at"] = datetime.utcnow()
-    await db.event_settings.update_one({}, {"$set": update})
+    await db.events.update_one({"event_id": event["event_id"]}, {"$set": update})
 
     await db.audit_logs.insert_one({
         "action": "event_settings_updated",
@@ -960,35 +1064,39 @@ async def update_current_event(body: EventUpdate, admin=Depends(get_admin_user))
 async def get_event_history(admin=Depends(get_admin_user)):
     db = get_db()
     history = []
-    async for h in db.event_history.find().sort("archived_at", -1).limit(50):
+    async for h in db.event_history.find().sort("archived_at", -1).limit(100):
         h["_id"] = str(h["_id"])
         history.append(h)
-    return {"history": history}
+    from app.events import get_current_event as _get_current
+    current = await _get_current()
+    return {"history": history, "current_event": current}
 
 
 @router.get("/event/countdown")
 async def get_event_countdown(admin=Depends(get_admin_user)):
+    from app.events import get_current_event as _get_current, compute_event_status
     db = get_db()
-    settings = await db.event_settings.find_one({})
-    if not settings:
+    event = await _get_current()
+    if not event:
         return {"server_time": datetime.utcnow().isoformat(), "status": "DRAFT"}
-    computed = compute_event_status(settings)
+    computed = compute_event_status(event)
     return {
         "server_time": datetime.utcnow().isoformat(),
         "status": computed,
-        "event_start_time": settings.get("event_start_time"),
-        "event_end_time": settings.get("event_end_time"),
+        "event_start_time": event.get("event_start_time"),
+        "event_end_time": event.get("event_end_time"),
     }
 
 
 @router.post("/allocation/generate")
 async def generate_allocation(admin=Depends(get_admin_user)):
+    from app.events import get_current_event as _get_current
     db = get_db()
 
-    settings = await db.event_settings.find_one({})
-    event_status = _get_event_status(settings)
+    event = await _get_current()
+    event_id = event["event_id"] if event else None
 
-    if event_status == "ONGOING":
+    if event and compute_event_status(event) == "ONGOING":
         raise HTTPException(
             status_code=403,
             detail="Challenge allocation is locked because the event is live."
@@ -1009,35 +1117,41 @@ async def generate_allocation(admin=Depends(get_admin_user)):
     if not challenges:
         raise HTTPException(status_code=400, detail="No challenges imported")
 
-    await db.allocations.delete_many({})
+    await db.allocations.delete_many({"event_id": event_id} if event_id else {})
 
+    # Balanced randomized allocation: round-robin over shuffled challenge codes
+    # so that no challenge is unfairly over/under-loaded.
     random.shuffle(teams)
     challenge_codes = [ch["challenge_code"] for ch in challenges]
     random.shuffle(challenge_codes)
+    counts = {cc: 0 for cc in challenge_codes}
     num_challenges = len(challenge_codes)
 
     allocations = []
     for i, team in enumerate(teams):
-        cc = challenge_codes[i % num_challenges]
+        # pick the challenge with the fewest allocations so far (balanced)
+        cc = min(challenge_codes, key=lambda c: counts[c])
+        counts[cc] += 1
         alloc_doc = {
             "team_code": team["team_code"],
             "challenge_code": cc,
             "released": True,
+            "event_id": event_id,
             "allocated_at": datetime.utcnow()
         }
         await db.allocations.insert_one(alloc_doc)
         allocations.append(alloc_doc)
 
-    await db.event_settings.update_one(
-        {},
-        {"$set": {"allocation_state": "RELEASED"}},
-        upsert=True
-    )
+    if event_id:
+        await db.events.update_one(
+            {"event_id": event_id},
+            {"$set": {"allocation_state": "RELEASED", "updated_at": datetime.utcnow()}}
+        )
 
     await db.audit_logs.insert_one({
         "action": "allocation_generated",
         "actor": admin.get("sub", "admin"),
-        "details": f"Generated and released allocations for {len(teams)} teams across {len(challenges)} challenges",
+        "details": f"Generated and released balanced allocations for {len(teams)} teams across {len(challenges)} challenges",
         "timestamp": datetime.utcnow()
     })
 
@@ -1053,20 +1167,24 @@ async def generate_allocation(admin=Depends(get_admin_user)):
 
 @router.post("/allocation/release")
 async def release_allocation(admin=Depends(get_admin_user)):
+    from app.events import get_current_event as _get_current
     db = get_db()
 
-    settings = await db.event_settings.find_one({})
-    event_status = _get_event_status(settings)
+    event = await _get_current()
+    event_id = event["event_id"] if event else None
 
-    if event_status == "ONGOING":
+    if event and compute_event_status(event) == "ONGOING":
         raise HTTPException(status_code=403, detail="Cannot release allocations during an ongoing event.")
 
-    result = await db.allocations.update_many({}, {"$set": {"released": True}})
-    await db.event_settings.update_one(
-        {},
-        {"$set": {"allocation_state": "RELEASED"}},
-        upsert=True
+    result = await db.allocations.update_many(
+        {"event_id": event_id} if event_id else {},
+        {"$set": {"released": True}}
     )
+    if event_id:
+        await db.events.update_one(
+            {"event_id": event_id},
+            {"$set": {"allocation_state": "RELEASED", "updated_at": datetime.utcnow()}}
+        )
 
     await db.audit_logs.insert_one({
         "action": "allocation_released",
@@ -1080,20 +1198,21 @@ async def release_allocation(admin=Depends(get_admin_user)):
 
 @router.post("/allocation/reset")
 async def reset_allocation(admin=Depends(get_admin_user)):
+    from app.events import get_current_event as _get_current
     db = get_db()
 
-    settings = await db.event_settings.find_one({})
-    event_status = _get_event_status(settings)
+    event = await _get_current()
+    event_id = event["event_id"] if event else None
 
-    if event_status == "ONGOING":
+    if event and compute_event_status(event) == "ONGOING":
         raise HTTPException(status_code=403, detail="Cannot reset allocations during an ongoing event.")
 
-    await db.allocations.delete_many({})
-    await db.event_settings.update_one(
-        {},
-        {"$set": {"allocation_state": "PENDING"}},
-        upsert=True
-    )
+    await db.allocations.delete_many({"event_id": event_id} if event_id else {})
+    if event_id:
+        await db.events.update_one(
+            {"event_id": event_id},
+            {"$set": {"allocation_state": "PENDING", "updated_at": datetime.utcnow()}}
+        )
 
     await db.audit_logs.insert_one({
         "action": "allocation_reset",
@@ -1107,20 +1226,25 @@ async def reset_allocation(admin=Depends(get_admin_user)):
 
 @router.get("/allocation")
 async def get_allocations(admin=Depends(get_admin_user)):
+    from app.events import get_current_event as _get_current
     db = get_db()
+    event = await _get_current()
+    event_id = event["event_id"] if event else None
+
     allocations = []
-    async for alloc in db.allocations.find():
+    query = {"event_id": event_id} if event_id else {}
+    async for alloc in db.allocations.find(query):
         alloc["_id"] = str(alloc["_id"])
         allocations.append(alloc)
 
-    settings = await db.event_settings.find_one({})
-    alloc_state = settings.get("allocation_state", "PENDING") if settings else "PENDING"
-    computed = _get_event_status(settings)
+    alloc_state = (event.get("allocation_state", "PENDING") if event else "PENDING")
+    computed = compute_event_status(event) if event else "DRAFT"
 
     return {
         "allocations": allocations,
         "allocation_state": alloc_state,
         "event_status": computed,
+        "event_code": event.get("event_code") if event else None,
         "count": len(allocations)
     }
 
@@ -1175,147 +1299,20 @@ async def delete_announcement(announcement_id: str, admin=Depends(get_admin_user
 
 
 # ─────────────────────────────────────────────
-# CHECK-IN
-# ─────────────────────────────────────────────
-
-# ─────────────────────────────────────────────
-# CHECK-IN (event-specific)
-# ─────────────────────────────────────────────
-
-class CheckinAction(BaseModel):
-    team_code: str
-
-
-@router.post("/checkin")
-async def checkin_team(body: CheckinAction, admin=Depends(get_admin_user)):
-    db = get_db()
-    settings = await db.event_settings.find_one({})
-    if not settings:
-        raise HTTPException(status_code=400, detail="No event configured")
-    event_code = settings.get("event_code")
-    if not event_code:
-        raise HTTPException(status_code=400, detail="Event has no code")
-
-    team = await db.teams.find_one({"team_code": body.team_code})
-    if not team:
-        raise HTTPException(status_code=404, detail="Team not found")
-
-    existing = await db.checkins.find_one({"team_code": body.team_code, "event_code": event_code})
-    if existing:
-        return {
-            "message": f"Team {body.team_code} is already checked in for this event",
-            "checked_in": True,
-            "checked_in_at": existing.get("checked_in_at"),
-        }
-
-    now = datetime.utcnow()
-    await db.checkins.update_one(
-        {"team_code": body.team_code, "event_code": event_code},
-        {"$set": {
-            "team_code": body.team_code,
-            "event_code": event_code,
-            "checked_in": True,
-            "checked_in_at": now,
-            "checked_in_by": admin.get("sub", "admin"),
-            "updated_at": now,
-        }},
-        upsert=True
-    )
-
-    await db.audit_logs.insert_one({
-        "action": "checkin",
-        "actor": admin.get("sub", "admin"),
-        "details": f"Team {body.team_code} checked in for event {event_code}",
-        "timestamp": now
-    })
-
-    return {"message": f"Team {body.team_code} checked in successfully", "checked_in": True, "checked_in_at": now.isoformat()}
-
-
-@router.delete("/checkin/{team_code}")
-async def uncheckin_team(team_code: str, admin=Depends(get_admin_user)):
-    db = get_db()
-    settings = await db.event_settings.find_one({})
-    if not settings:
-        raise HTTPException(status_code=400, detail="No event configured")
-    event_code = settings.get("event_code")
-    if not event_code:
-        raise HTTPException(status_code=400, detail="Event has no code")
-
-    team = await db.teams.find_one({"team_code": team_code})
-    if not team:
-        raise HTTPException(status_code=404, detail="Team not found")
-
-    result = await db.checkins.delete_one({"team_code": team_code, "event_code": event_code})
-    if result.deleted_count == 0:
-        return {"message": f"Team {team_code} was not checked in", "checked_in": False}
-
-    await db.audit_logs.insert_one({
-        "action": "checkin_removed",
-        "actor": admin.get("sub", "admin"),
-        "details": f"Team {team_code} check-in removed for event {event_code}",
-        "timestamp": datetime.utcnow()
-    })
-
-    return {"message": f"Team {team_code} check-in removed", "checked_in": False}
-
-
-@router.get("/checkin")
-async def list_checkins(
-    search: Optional[str] = Query(None),
-    admin=Depends(get_admin_user)
-):
-    db = get_db()
-    settings = await db.event_settings.find_one({})
-    event_code = settings.get("event_code") if settings else None
-
-    if not event_code:
-        return {"checkins": [], "event_code": None}
-
-    checked_in_map = {}
-    async for c in db.checkins.find({"event_code": event_code}):
-        checked_in_map[c["team_code"]] = c
-
-    query = {}
-    if search:
-        safe = re.escape(search.strip())
-        query["$or"] = [
-            {"team_code": {"$regex": safe, "$options": "i"}},
-            {"team_name": {"$regex": safe, "$options": "i"}},
-        ]
-
-    teams = []
-    async for t in db.teams.find(query).sort("team_code", 1):
-        tc = t["team_code"]
-        ci = checked_in_map.get(tc)
-        participants = []
-        async for p in db.participants.find({"team_code": tc}):
-            participants.append({"name": p.get("name", ""), "email": p.get("email", "")})
-        alloc = await db.allocations.find_one({"team_code": tc})
-        teams.append({
-            "team_code": tc,
-            "team_name": t.get("team_name", ""),
-            "team_status": t.get("status", "ACTIVE"),
-            "bin_number": t.get("bin_number", ""),
-            "participants": participants,
-            "challenge_code": alloc.get("challenge_code", "") if alloc else "",
-            "checked_in": ci is not None and ci.get("checked_in", False),
-            "checked_in_at": ci.get("checked_in_at").isoformat() if ci and ci.get("checked_in_at") else None,
-            "checked_in_by": ci.get("checked_in_by") if ci else None,
-        })
-
-    return {"checkins": teams, "event_code": event_code}
-
-
-# ─────────────────────────────────────────────
 # LEADERBOARD
 # ─────────────────────────────────────────────
 
 @router.get("/leaderboard")
 async def get_leaderboard(admin=Depends(get_admin_user)):
+    from app.events import get_current_event as _get_current
     db = get_db()
+    event = await _get_current()
+    event_id = event["event_id"] if event else None
+    query = {"status": "evaluated"}
+    if event_id:
+        query["event_id"] = event_id
     entries = []
-    async for sub in db.submissions.find({"status": "evaluated"}).sort("score", -1):
+    async for sub in db.submissions.find(query).sort("score", -1):
         team = await db.teams.find_one({"team_code": sub["team_code"]})
         alloc = await db.allocations.find_one({"team_code": sub["team_code"]})
         entries.append({
@@ -1361,20 +1358,22 @@ async def get_audit_logs(admin=Depends(get_admin_user), search: str = Query(defa
 
 @router.get("/dashboard")
 async def get_dashboard(admin=Depends(get_admin_user)):
+    from app.events import get_current_event as _get_current, compute_event_status
     db = get_db()
 
     total_teams = await db.teams.count_documents({})
     total_participants = await db.participants.count_documents({})
     total_challenges = await db.challenges.count_documents({})
     ready_challenges = await db.challenges.count_documents({"status": "READY"})
-    checked_in = await db.checkins.count_documents({"event_code": settings.get("event_code") if settings else None, "checked_in": True}) if settings and settings.get("event_code") else 0
 
-    event_settings = await db.event_settings.find_one({})
-    event_status = compute_event_status(event_settings) if event_settings else "DRAFT"
+    event = await _get_current()
+    event_id = event["event_id"] if event else None
+    event_status = compute_event_status(event) if event else "DRAFT"
+    alloc_query = {"event_id": event_id} if event_id else {}
 
     challenge_distribution = []
     async for ch in db.challenges.find():
-        alloc_count = await db.allocations.count_documents({"challenge_code": ch["challenge_code"]})
+        alloc_count = await db.allocations.count_documents({"challenge_code": ch["challenge_code"], **alloc_query})
         challenge_distribution.append({
             "challenge_code": ch["challenge_code"],
             "challenge_name": ch.get("challenge_name", ch.get("name", ch.get("title", ch["challenge_code"]))),
@@ -1382,15 +1381,14 @@ async def get_dashboard(admin=Depends(get_admin_user)):
             "allocated_teams": alloc_count
         })
 
-    allocated_teams = await db.allocations.count_documents({})
-    released_allocations = await db.allocations.count_documents({"released": True})
+    allocated_teams = await db.allocations.count_documents(alloc_query)
+    released_allocations = await db.allocations.count_documents({**alloc_query, "released": True})
 
-    total_submissions = await db.submissions.count_documents({})
-    evaluated_submissions = await db.submissions.count_documents({"status": "evaluated"})
+    sub_query = {"event_id": event_id} if event_id else {}
+    total_submissions = await db.submissions.count_documents(sub_query)
+    evaluated_submissions = await db.submissions.count_documents({**sub_query, "status": "evaluated"})
 
-    alloc_state = "PENDING"
-    if event_settings:
-        alloc_state = event_settings.get("allocation_state", "PENDING")
+    alloc_state = (event.get("allocation_state", "PENDING") if event else "PENDING")
 
     return {
         "total_teams": total_teams,
@@ -1398,9 +1396,9 @@ async def get_dashboard(admin=Depends(get_admin_user)):
         "imported_challenges": total_challenges,
         "ready_challenges": ready_challenges,
         "registered_teams": total_teams,
-        "checked_in_teams": checked_in,
-        "completed_teams": completed,
         "event_status": event_status,
+        "event_code": event.get("event_code") if event else None,
+        "event_name": event.get("event_name") if event else None,
         "challenge_distribution": challenge_distribution,
         "total_submissions": total_submissions,
         "evaluated_submissions": evaluated_submissions,

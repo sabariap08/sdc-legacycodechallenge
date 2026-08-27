@@ -104,18 +104,19 @@ async def get_file_tree_from_db(challenge_code: str) -> list:
         logger.error("Failed to get file tree from DB for %s: %s", challenge_code, e)
         return []
 
-    def build_nodes(node):
+    def build_nodes(node, prefix=""):
         result = []
         for name in sorted(node.keys()):
             if name == "_children":
                 continue
             entry = node[name]
+            rel = (prefix + "/" + name) if prefix else name
             if "_children" in entry:
-                children = build_nodes(entry["_children"])
+                children = build_nodes(entry["_children"], rel)
                 if children:
-                    result.append({"name": name, "path": None, "type": "directory", "children": children})
+                    result.append({"name": name, "path": rel, "type": "directory", "children": children})
             elif "_file" in entry:
-                result.append({"name": name, "path": None, "type": "file"})
+                result.append({"name": name, "path": rel, "type": "file"})
         return result
 
     return build_nodes(tree)

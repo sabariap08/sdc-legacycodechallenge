@@ -12,12 +12,14 @@
         .status-hero.upcoming::before { background:var(--warning); }
         .status-hero.ongoing::before { background:var(--success); }
         .status-hero.completed::before { background:var(--danger); }
+        .status-hero.cancelled::before { background:var(--danger); }
         .status-label { font-size:11px; font-weight:600; color:var(--text-muted); text-transform:uppercase; letter-spacing:1px; margin-bottom:8px; }
         .status-value { font-size:32px; font-weight:800; margin-bottom:4px; }
         .status-value.draft { color:var(--text-muted); }
         .status-value.upcoming { color:var(--warning); }
         .status-value.ongoing { color:var(--success); }
         .status-value.completed { color:var(--danger); }
+        .status-value.cancelled { color:var(--danger); }
         .event-code-badge { display:inline-flex; align-items:center; gap:6px; padding:6px 16px; background:var(--bg-input); border:1px solid var(--border); border-radius:var(--radius-full); font-family:var(--font-mono); font-size:14px; font-weight:600; color:var(--primary); margin-top:8px; cursor:pointer; transition:var(--transition); }
         .event-code-badge:hover { border-color:var(--primary); }
         .event-code-badge .copy-hint { font-size:10px; color:var(--text-muted); font-family:var(--font-sans); }
@@ -32,6 +34,7 @@
         .info-card .info-value.muted { color:var(--text-muted); font-size:12px; }
         .action-row { display:flex; gap:12px; flex-wrap:wrap; margin-bottom:24px; }
         .action-row .btn { flex:1; min-width:180px; padding:16px 24px; font-size:14px; justify-content:center; }
+        .cancelled-banner { background:rgba(239,68,68,0.1); border:1px solid rgba(239,68,68,0.3); color:var(--danger); padding:12px 16px; border-radius:var(--radius-md); font-size:13px; margin-bottom:16px; display:flex; gap:8px; align-items:center; }
         @media (max-width:640px) { .info-grid { grid-template-columns:1fr; } .action-row .btn { min-width:100%; } }
     </style>
 </head>
@@ -50,6 +53,8 @@
             <div id="error-msg" class="error-message"></div>
             <div id="success-msg" class="success-message"></div>
 
+            <div id="cancelledBanner" class="cancelled-banner" style="display:none;">${ICONS.alertCircle} This event has been cancelled.</div>
+
             <div class="status-hero draft" id="statusHero">
                 <div class="status-label">Current Event Status</div>
                 <div class="status-value draft" id="statusValue">Loading...</div>
@@ -63,28 +68,31 @@
             </div>
 
             <div class="info-grid" id="infoCards">
+                <div class="info-card"><div class="info-label">Event Name</div><div class="info-value" id="infoName">-</div></div>
                 <div class="info-card"><div class="info-label">Start Date & Time</div><div class="info-value muted" id="infoStart">Not set</div></div>
                 <div class="info-card"><div class="info-label">End Date & Time</div><div class="info-value muted" id="infoEnd">Not set</div></div>
-                <div class="info-card"><div class="info-label">Duration</div><div class="info-value" id="infoDuration">-</div></div>
             </div>
 
             <div class="action-row">
-                <button class="btn btn-danger" onclick="openRestartModal()" id="restartBtn">${ICONS.refresh} Restart Event</button>
-                <button class="btn btn-secondary" onclick="openEditModal()" id="editBtn">${ICONS.clock} Edit Current Event</button>
-                <a href="/admin/history" class="btn btn-ghost" style="flex:0;min-width:auto;text-decoration:none;">${ICONS.clipboard} History</a>
+                <button class="btn btn-primary" onclick="openNewEventModal()" id="newEventBtn">New Event</button>
+                <button class="btn btn-secondary" onclick="openEditModal()" id="editBtn">Edit Event</button>
+                <button class="btn btn-secondary" onclick="openCancelModal()" id="cancelBtn" style="display:none;">Cancel Event</button>
+                <button class="btn btn-danger" onclick="openDeleteModal()" id="deleteBtn" style="display:none;">Delete Event</button>
+                <a href="/admin/history" class="btn btn-ghost" style="flex:0;min-width:auto;text-decoration:none;align-self:center;">${ICONS.history} History</a>
             </div>
 
-            <div id="restartModal" class="modal-overlay">
+            <div id="newEventModal" class="modal-overlay">
                 <div class="modal" style="max-width:520px;">
-                    <div class="modal-header"><h3>Restart Event</h3><button class="modal-close" onclick="closeRestartModal()">&times;</button></div>
-                    <p style="font-size:13px; color:var(--text-secondary); margin-bottom:16px;">This will archive the current event to History, clear allocations/submissions/workspaces/checkins, and start a fresh event with a new unique code.</p>
-                    <form id="restartForm">
-                        <div class="form-group"><label>Start Date & Time <span style="color:var(--danger);">*</span></label><input type="datetime-local" id="restartStartTime" required></div>
-                        <div class="form-group"><label>End Date & Time <span style="color:var(--danger);">*</span></label><input type="datetime-local" id="restartEndTime" required></div>
-                        <div class="form-group"><label>Duration (minutes)</label><input type="number" id="restartDuration" min="5" max="1440" value="300"><small style="color:var(--text-muted); font-size:11px; margin-top:4px; display:block;">Maximum allowed time per participant</small></div>
+                    <div class="modal-header"><h3>Start a New Event</h3><button class="modal-close" onclick="closeModal('newEventModal')">&times;</button></div>
+                    <p style="font-size:13px; color:var(--text-secondary); margin-bottom:16px;">This archives the current event to History, clears the current event's allocations and submissions, and creates a fresh event with a brand-new unique code.</p>
+                    <form id="newEventForm">
+                        <div class="form-group"><label>Event Name</label><input type="text" id="newEventName" value="Legacy Code Rescue" placeholder="Event name"></div>
+                        <div class="form-group"><label>Start Date & Time (optional)</label><input type="datetime-local" id="newStartTime"><small style="color:var(--text-muted); font-size:11px; margin-top:4px; display:block;">Leave blank to create an unscheduled event.</small></div>
+                        <div class="form-group"><label>End Date & Time (optional)</label><input type="datetime-local" id="newEndTime"></div>
+                        <div class="form-group"><label>Duration (minutes)</label><input type="number" id="newDuration" min="5" max="1440" value="300"><small style="color:var(--text-muted); font-size:11px; margin-top:4px; display:block;">Maximum time allowed per participant</small></div>
                         <div class="modal-footer" style="border-top:none;padding-top:8px;">
-                            <button type="button" class="btn btn-secondary" onclick="closeRestartModal()">Cancel</button>
-                            <button type="submit" class="btn btn-danger" id="restartSubmitBtn">${ICONS.refresh} Restart Event</button>
+                            <button type="button" class="btn btn-secondary" onclick="closeModal('newEventModal')">Cancel</button>
+                            <button type="submit" class="btn btn-primary" id="newEventSubmitBtn">Start New Event</button>
                         </div>
                     </form>
                 </div>
@@ -92,15 +100,48 @@
 
             <div id="editModal" class="modal-overlay">
                 <div class="modal" style="max-width:520px;">
-                    <div class="modal-header"><h3>Edit Current Event</h3><button class="modal-close" onclick="closeEditModal()">&times;</button></div>
+                    <div class="modal-header"><h3>Edit Current Event</h3><button class="modal-close" onclick="closeModal('editModal')">&times;</button></div>
                     <form id="editForm">
                         <div class="form-group"><label>Event Code</label><input type="text" id="editEventCode" readonly disabled style="opacity:0.6;cursor:not-allowed;font-family:var(--font-mono);"></div>
+                        <div class="form-group"><label>Event Name</label><input type="text" id="editName"></div>
                         <div class="form-group"><label>Start Date & Time</label><input type="datetime-local" id="editStartTime"><small id="editStartHint" style="color:var(--text-muted); font-size:11px; margin-top:4px; display:block;"></small></div>
                         <div class="form-group"><label>End Date & Time <span style="color:var(--danger);">*</span></label><input type="datetime-local" id="editEndTime" required></div>
                         <div class="form-group"><label>Duration (minutes)</label><input type="number" id="editDuration" min="5" max="1440" value="300"></div>
+                        <div class="form-group form-check" style="display:flex; align-items:center; gap:8px;">
+                            <input type="checkbox" id="editLeaderboard">
+                            <label for="editLeaderboard" style="margin:0;">Enable public leaderboard</label>
+                        </div>
                         <div class="modal-footer" style="border-top:none;padding-top:8px;">
-                            <button type="button" class="btn btn-secondary" onclick="closeEditModal()">Cancel</button>
-                            <button type="submit" class="btn btn-primary" id="editSubmitBtn">${ICONS.save} Save Configuration</button>
+                            <button type="button" class="btn btn-secondary" onclick="closeModal('editModal')">Cancel</button>
+                            <button type="submit" class="btn btn-primary" id="editSubmitBtn">Save Configuration</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <div id="cancelModal" class="modal-overlay">
+                <div class="modal" style="max-width:480px;">
+                    <div class="modal-header"><h3>Cancel Event</h3><button class="modal-close" onclick="closeModal('cancelModal')">&times;</button></div>
+                    <p style="font-size:13px; color:var(--text-secondary); margin-bottom:16px;">This will cancel the current event. Participants will not be able to continue submitting. This can be done without deleting the event.</p>
+                    <form id="cancelForm">
+                        <div class="form-group"><label>Reason</label><input type="text" id="cancelReason" placeholder="Reason for cancellation (optional)"></div>
+                        <div class="modal-footer" style="border-top:none;padding-top:8px;">
+                            <button type="button" class="btn btn-secondary" onclick="closeModal('cancelModal')">Cancel</button>
+                            <button type="submit" class="btn btn-danger" id="cancelSubmitBtn">Confirm Cancellation</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <div id="deleteModal" class="modal-overlay">
+                <div class="modal" style="max-width:480px;">
+                    <div class="modal-header"><h3>Delete Event</h3><button class="modal-close" onclick="closeModal('deleteModal')">&times;</button></div>
+                    <p style="font-size:13px; color:var(--text-secondary); margin-bottom:16px;">Deleting archives this event to History and removes its allocations and submissions. This cannot be undone.</p>
+                    <form id="deleteForm">
+                        <div class="form-group"><label>Reason</label><input type="text" id="deleteReason" placeholder="Reason for deletion (optional)"></div>
+                        <div class="modal-footer" style="border-top:none;padding-top:8px;">
+                            <button type="button" class="btn btn-secondary" onclick="closeModal('deleteModal')">Cancel</button>
+                            <button type="submit" class="btn btn-danger" id="deleteSubmitBtn">Confirm Delete</button>
                         </div>
                     </form>
                 </div>
@@ -132,30 +173,35 @@
             return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
         }
 
-        function openRestartModal() {
+        function closeModal(id) {
+            document.getElementById(id).classList.remove('active');
+        }
+
+        function openNewEventModal() {
             if (currentEvent && currentEvent.event_start_time) {
-                document.getElementById('restartStartTime').value = toLocalDatetimeValue(currentEvent.event_start_time);
+                document.getElementById('newStartTime').value = toLocalDatetimeValue(currentEvent.event_start_time);
             }
             if (currentEvent && currentEvent.event_end_time) {
-                document.getElementById('restartEndTime').value = toLocalDatetimeValue(currentEvent.event_end_time);
+                document.getElementById('newEndTime').value = toLocalDatetimeValue(currentEvent.event_end_time);
             }
             if (currentEvent && currentEvent.event_duration_minutes) {
-                document.getElementById('restartDuration').value = currentEvent.event_duration_minutes;
+                document.getElementById('newDuration').value = currentEvent.event_duration_minutes;
             }
-            document.getElementById('restartModal').classList.add('active');
+            document.getElementById('newEventModal').classList.add('active');
         }
-        function closeRestartModal() { document.getElementById('restartModal').classList.remove('active'); }
 
         function openEditModal() {
             if (!currentEvent) { showError('error-msg', 'No event configured to edit'); return; }
             document.getElementById('editEventCode').value = currentEvent.event_code || '-';
+            document.getElementById('editName').value = currentEvent.event_name || '';
             document.getElementById('editStartTime').value = currentEvent.event_start_time ? toLocalDatetimeValue(currentEvent.event_start_time) : '';
             document.getElementById('editEndTime').value = currentEvent.event_end_time ? toLocalDatetimeValue(currentEvent.event_end_time) : '';
             document.getElementById('editDuration').value = currentEvent.event_duration_minutes || 300;
+            document.getElementById('editLeaderboard').checked = !!currentEvent.leaderboard_enabled;
 
             const startInput = document.getElementById('editStartTime');
             const hint = document.getElementById('editStartHint');
-            if (currentComputedStatus === 'ONGOING' || currentComputedStatus === 'COMPLETED') {
+            if (currentComputedStatus === 'ONGOING' || currentComputedStatus === 'COMPLETED' || currentComputedStatus === 'CANCELLED') {
                 startInput.disabled = true;
                 startInput.style.opacity = '0.5';
                 hint.textContent = currentComputedStatus === 'ONGOING' ? 'Start time cannot be changed while event is ongoing.' : '';
@@ -166,36 +212,40 @@
             }
             document.getElementById('editModal').classList.add('active');
         }
-        function closeEditModal() { document.getElementById('editModal').classList.remove('active'); }
 
-        document.getElementById('restartForm').addEventListener('submit', async (e) => {
+        function openCancelModal() {
+            document.getElementById('cancelReason').value = '';
+            document.getElementById('cancelModal').classList.add('active');
+        }
+
+        function openDeleteModal() {
+            document.getElementById('deleteReason').value = '';
+            document.getElementById('deleteModal').classList.add('active');
+        }
+
+        document.getElementById('newEventForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             hideError('error-msg'); hideSuccess('success-msg');
-            const st = document.getElementById('restartStartTime').value;
-            const et = document.getElementById('restartEndTime').value;
-            const dur = parseInt(document.getElementById('restartDuration').value);
-            if (!st || !et) { showError('error-msg', 'Start and End times are required'); return; }
-            const startDt = new Date(st);
-            const endDt = new Date(et);
-            if (endDt <= startDt) { showError('error-msg', 'End time must be after start time'); return; }
-            if (!dur || dur < 5) { showError('error-msg', 'Duration must be at least 5 minutes'); return; }
-            const btn = document.getElementById('restartSubmitBtn');
-            btn.disabled = true; btn.innerHTML = '<span class="loading-spinner"></span> Restarting...';
+            const st = document.getElementById('newStartTime').value;
+            const et = document.getElementById('newEndTime').value;
+            const dur = parseInt(document.getElementById('newDuration').value) || 300;
+            if (st && et && new Date(et) <= new Date(st)) { showError('error-msg', 'End time must be after start time'); return; }
+            const btn = document.getElementById('newEventSubmitBtn');
+            btn.disabled = true; btn.textContent = 'Creating...';
+            const name = document.getElementById('newEventName').value.trim() || 'Legacy Code Rescue';
+            const body = { event_name: name, event_duration_minutes: dur };
+            if (st) body.event_start_time = new Date(st).toISOString();
+            if (et) body.event_end_time = new Date(et).toISOString();
             try {
-                const resp = await API.post('/api/admin/event/restart', {
-                    confirm: true,
-                    event_start_time: startDt.toISOString(),
-                    event_end_time: endDt.toISOString(),
-                    event_duration_minutes: dur
-                });
+                const resp = await API.post('/api/admin/event/new', body);
                 const data = await resp.json();
                 if (resp.ok) {
-                    closeRestartModal();
-                    showSuccess('success-msg', 'Event restarted. New code: <strong>' + escapeHtml(data.new_event_code) + '</strong>');
+                    closeModal('newEventModal');
+                    showSuccess('success-msg', 'New event created. Code: <strong>' + escapeHtml(data.event_code) + '</strong>');
                     loadStatus();
-                } else { showError('error-msg', data.detail || 'Failed to restart'); }
+                } else { showError('error-msg', data.detail || 'Failed to create event'); }
             } catch (err) { showError('error-msg', err.message); }
-            btn.disabled = false; btn.innerHTML = ICONS.refresh + ' Restart Event';
+            btn.disabled = false; btn.textContent = 'Start New Event';
         });
 
         document.getElementById('editForm').addEventListener('submit', async (e) => {
@@ -204,24 +254,61 @@
             const st = document.getElementById('editStartTime').value;
             const et = document.getElementById('editEndTime').value;
             const dur = parseInt(document.getElementById('editDuration').value);
+            const name = document.getElementById('editName').value.trim();
             if (!et) { showError('error-msg', 'End time is required'); return; }
             const startDt = st ? new Date(st) : null;
             const endDt = new Date(et);
             if (startDt && endDt <= startDt) { showError('error-msg', 'End time must be after start time'); return; }
             if (!dur || dur < 5) { showError('error-msg', 'Duration must be at least 5 minutes'); return; }
             const btn = document.getElementById('editSubmitBtn');
-            btn.disabled = true; btn.innerHTML = '<span class="loading-spinner"></span> Saving...';
-            const body = { event_end_time: endDt.toISOString(), event_duration_minutes: dur };
+            btn.disabled = true; btn.textContent = 'Saving...';
+            const body = {
+                event_end_time: endDt.toISOString(),
+                event_duration_minutes: dur,
+                event_name: name,
+                leaderboard_enabled: document.getElementById('editLeaderboard').checked
+            };
             if (startDt && !document.getElementById('editStartTime').disabled) {
                 body.event_start_time = startDt.toISOString();
             }
             try {
                 const resp = await API.put('/api/admin/event/current', body);
                 const data = await resp.json();
-                if (resp.ok) { closeEditModal(); showSuccess('success-msg', 'Event configuration saved'); loadStatus(); }
+                if (resp.ok) { closeModal('editModal'); showSuccess('success-msg', 'Event configuration saved'); loadStatus(); }
                 else { showError('error-msg', data.detail || 'Failed to save'); }
             } catch (err) { showError('error-msg', err.message); }
-            btn.disabled = false; btn.innerHTML = ICONS.save + ' Save Configuration';
+            btn.disabled = false; btn.textContent = 'Save Configuration';
+        });
+
+        document.getElementById('cancelForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            hideError('error-msg'); hideSuccess('success-msg');
+            const btn = document.getElementById('cancelSubmitBtn');
+            btn.disabled = true; btn.textContent = 'Cancelling...';
+            try {
+                const resp = await API.post('/api/admin/event/cancel', { reason: document.getElementById('cancelReason').value });
+                const data = await resp.json();
+                if (resp.ok) { closeModal('cancelModal'); showSuccess('success-msg', 'Event cancelled'); loadStatus(); }
+                else { showError('error-msg', data.detail || 'Failed to cancel'); }
+            } catch (err) { showError('error-msg', err.message); }
+            btn.disabled = false; btn.textContent = 'Confirm Cancellation';
+        });
+
+        document.getElementById('deleteForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            hideError('error-msg'); hideSuccess('success-msg');
+            const btn = document.getElementById('deleteSubmitBtn');
+            btn.disabled = true; btn.textContent = 'Deleting...';
+            try {
+                const resp = await API.post('/api/admin/event/delete', {
+                    confirm: true,
+                    reason: document.getElementById('deleteReason').value || 'Event deleted by admin'
+                });
+                const data = await resp.json();
+                if (resp.ok) { closeModal('deleteModal'); showSuccess('success-msg', 'Event deleted'); loadStatus(); }
+                else { showError('error-msg', data.detail || 'Failed to delete'); }
+            } catch (err) { showError('error-msg', err.message); }
+            btn.disabled = false; btn.textContent = 'Confirm Delete';
         });
 
         async function loadStatus() {
@@ -240,6 +327,8 @@
                 statusEl.className = 'status-value ' + data.computed_status.toLowerCase();
                 heroEl.className = 'status-hero ' + data.computed_status.toLowerCase();
 
+                document.getElementById('cancelledBanner').style.display = data.computed_status === 'CANCELLED' ? 'flex' : 'none';
+
                 const codeWrap = document.getElementById('eventCodeWrap');
                 if (currentEvent && currentEvent.event_code) {
                     codeWrap.style.display = '';
@@ -247,18 +336,22 @@
                 } else { codeWrap.style.display = 'none'; }
 
                 if (currentEvent) {
+                    document.getElementById('infoName').textContent = currentEvent.event_name || '-';
                     document.getElementById('infoStart').textContent = currentEvent.event_start_time ? formatDateLocal(currentEvent.event_start_time) : 'Not set';
                     document.getElementById('infoEnd').textContent = currentEvent.event_end_time ? formatDateLocal(currentEvent.event_end_time) : 'Not set';
-                    document.getElementById('infoDuration').textContent = (currentEvent.event_duration_minutes || 300) + ' min';
                 } else {
+                    document.getElementById('infoName').textContent = '-';
                     document.getElementById('infoStart').textContent = 'Not set';
                     document.getElementById('infoEnd').textContent = 'Not set';
-                    document.getElementById('infoDuration').textContent = '-';
                 }
 
                 const editBtn = document.getElementById('editBtn');
-                if (data.computed_status === 'COMPLETED') { editBtn.disabled = true; editBtn.innerHTML = ICONS.clock + ' Event Ended'; }
-                else { editBtn.disabled = false; editBtn.innerHTML = ICONS.clock + ' Edit Current Event'; }
+                const cancelBtn = document.getElementById('cancelBtn');
+                const deleteBtn = document.getElementById('deleteBtn');
+                const status = data.computed_status;
+                editBtn.style.display = status === 'DRAFT' ? 'none' : '';
+                cancelBtn.style.display = (status === 'UPCOMING' || status === 'ONGOING') ? '' : 'none';
+                deleteBtn.style.display = status === 'DRAFT' ? 'none' : '';
 
                 const countdownEl = document.getElementById('countdownDisplay');
                 countdownEl.innerHTML = '';

@@ -27,19 +27,47 @@ def sanitize_path(path: str) -> bool:
     return True
 
 
+def _to_datetime(value):
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).replace(tzinfo=None)
+    except (ValueError, TypeError):
+        return None
+
+
 def compute_event_status(settings: dict) -> str:
+    """Derive the authoritative, database-driven event status.
+
+    Rules (source of truth = persisted event document):
+      - CANCELLED is sticky and always wins (never auto-reverts).
+      - If start/end are missing -> UPCOMING (scheduled but not begun).
+      - now < start  -> UPCOMING
+      - now < end    -> ONGOING
+      - else         -> COMPLETED
+    """
+    if not settings:
+        return "UPCOMING"
+
+    if settings.get("status") == "CANCELLED":
+        return "CANCELLED"
+
+    start = _to_datetime(settings.get("event_start_time"))
+    end = _to_datetime(settings.get("event_end_time"))
+
     now = datetime.utcnow()
-    start = settings.get("event_start_time") if settings else None
-    end = settings.get("event_end_time") if settings else None
-    if not start or not end:
-        return settings.get("status", "DRAFT") if settings else "DRAFT"
-    if isinstance(start, str):
-        start = datetime.fromisoformat(start.replace("Z", "+00:00")).replace(tzinfo=None)
-    if isinstance(end, str):
-        end = datetime.fromisoformat(end.replace("Z", "+00:00")).replace(tzinfo=None)
+
+    if start is None and end is None:
+        return settings.get("status", "UPCOMING") if settings.get("status") in ("UPCOMING", "ONGOING", "COMPLETED") else "UPCOMING"
+
+    if start is None:
+        return "UPCOMING"
+
     if now < start:
         return "UPCOMING"
-    elif now < end:
+    elif end is None or now < end:
         return "ONGOING"
     else:
         return "COMPLETED"

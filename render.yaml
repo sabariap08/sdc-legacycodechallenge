@@ -2,7 +2,10 @@ services:
   - type: web
     name: legacy-code-rescue
     plan: free
-    dockerfilePath: ./Dockerfile
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: python start.py
     envVars:
       - key: MONGODB_URI
         sync: false

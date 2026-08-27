@@ -158,10 +158,36 @@ function getLanguageName(filename) {
     return map[ext] || ext.toUpperCase();
 }
 
+function showIDEBlocked(message) {
+    var treeEl = document.getElementById('fileTree');
+    if (treeEl) treeEl.innerHTML = '';
+    var codeName = document.getElementById('challengeNameDisplay');
+    if (codeName) codeName.textContent = 'Challenge Unavailable';
+    var codeCode = document.getElementById('challengeCodeDisplay');
+    if (codeCode) codeCode.textContent = '--';
+    var statusTeamCode = document.getElementById('statusTeamCode');
+    if (statusTeamCode) statusTeamCode.textContent = '';
+    var blocked = document.createElement('div');
+    blocked.style.cssText = 'display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;height:100%;min-height:60vh;padding:40px;text-align:center;';
+    blocked.innerHTML =
+        '<svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="var(--ide-accent)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.7"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>' +
+        '<strong style="font-size:18px;color:var(--ide-text);">' + escapeHtml(message) + '</strong>' +
+        '<a href="/participant/dashboard" style="display:inline-flex;align-items:center;gap:8px;padding:10px 22px;border-radius:8px;background:linear-gradient(135deg,var(--ide-accent),var(--ide-accent2));color:#fff;font-weight:600;text-decoration:none;font-size:14px;">Back to Dashboard</a>';
+    var editorArea = document.querySelector('.ide-editor-area') || document.body;
+    editorArea.insertBefore(blocked, editorArea.firstChild);
+}
+
 async function loadIDE() {
     try {
         var resp = await API.get('/api/workspace/code-details');
         if (!resp) return;
+        if (!resp.ok) {
+            var errData = null;
+            try { errData = await resp.json(); } catch (e) {}
+            var detail = (errData && errData.detail) ? errData.detail : 'Your challenge is not yet available.';
+            showIDEBlocked(detail);
+            return;
+        }
         codeDetails = await resp.json();
 
         document.getElementById('challengeCodeDisplay').textContent = codeDetails.challenge_code;
