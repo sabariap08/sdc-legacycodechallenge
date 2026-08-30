@@ -8,14 +8,14 @@
     <style>
         .status-hero { text-align:center; padding:32px; margin-bottom:24px; background:var(--bg-card); border:1px solid var(--border); border-radius:var(--radius-md); position:relative; overflow:hidden; }
         .status-hero::before { content:''; position:absolute; top:0; left:0; right:0; height:3px; }
-        .status-hero.draft::before { background:var(--text-muted); }
+        .status-hero.noevent::before { background:var(--text-muted); }
         .status-hero.upcoming::before { background:var(--warning); }
         .status-hero.ongoing::before { background:var(--success); }
         .status-hero.completed::before { background:var(--danger); }
         .status-hero.cancelled::before { background:var(--danger); }
         .status-label { font-size:11px; font-weight:600; color:var(--text-muted); text-transform:uppercase; letter-spacing:1px; margin-bottom:8px; }
         .status-value { font-size:32px; font-weight:800; margin-bottom:4px; }
-        .status-value.draft { color:var(--text-muted); }
+        .status-value.noevent { color:var(--text-muted); }
         .status-value.upcoming { color:var(--warning); }
         .status-value.ongoing { color:var(--success); }
         .status-value.completed { color:var(--danger); }
@@ -32,10 +32,13 @@
         .info-card .info-label { font-size:10px; font-weight:600; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px; }
         .info-card .info-value { font-size:14px; font-weight:600; color:var(--text-primary); }
         .info-card .info-value.muted { color:var(--text-muted); font-size:12px; }
+        .info-card.wide { grid-column: span 3; }
         .action-row { display:flex; gap:12px; flex-wrap:wrap; margin-bottom:24px; }
         .action-row .btn { flex:1; min-width:180px; padding:16px 24px; font-size:14px; justify-content:center; }
         .cancelled-banner { background:rgba(239,68,68,0.1); border:1px solid rgba(239,68,68,0.3); color:var(--danger); padding:12px 16px; border-radius:var(--radius-md); font-size:13px; margin-bottom:16px; display:flex; gap:8px; align-items:center; }
-        @media (max-width:640px) { .info-grid { grid-template-columns:1fr; } .action-row .btn { min-width:100%; } }
+        .duration-preview { margin-top:6px; font-size:12px; color:var(--primary); font-weight:600; }
+        .readonly-field { opacity:0.6; font-family:var(--font-mono); }
+        @media (max-width:640px) { .info-grid { grid-template-columns:1fr; } .info-card.wide { grid-column: span 1; } .action-row .btn { min-width:100%; } }
     </style>
 </head>
 <body>
@@ -47,17 +50,17 @@
         initTheme();
         document.getElementById('pageContent').innerHTML = `
             <div class="page-header with-actions">
-                <div><h1>Event Control</h1><p>Configure and manage the event lifecycle</p></div>
+                <div><h1>Event Control</h1><p>Manage the event lifecycle: New, Edit, Cancel</p></div>
                 <button class="btn btn-secondary btn-sm" onclick="loadStatus()">${ICONS.refresh} Refresh</button>
             </div>
             <div id="error-msg" class="error-message"></div>
             <div id="success-msg" class="success-message"></div>
 
-            <div id="cancelledBanner" class="cancelled-banner" style="display:none;">${ICONS.alertCircle} This event has been cancelled.</div>
+            <div id="cancelledBanner" class="cancelled-banner" style="display:none;">${ICONS.alertCircle} <span id="cancelledBannerText">This event has been cancelled.</span></div>
 
-            <div class="status-hero draft" id="statusHero">
+            <div class="status-hero noevent" id="statusHero">
                 <div class="status-label">Current Event Status</div>
-                <div class="status-value draft" id="statusValue">Loading...</div>
+                <div class="status-value noevent" id="statusValue">Loading...</div>
                 <div id="eventCodeWrap" style="display:none;">
                     <div class="event-code-badge" id="eventCodeBadge" onclick="copyEventCode()" title="Click to copy">
                         <span id="eventCodeText"></span>
@@ -68,28 +71,28 @@
             </div>
 
             <div class="info-grid" id="infoCards">
-                <div class="info-card"><div class="info-label">Event Name</div><div class="info-value" id="infoName">-</div></div>
                 <div class="info-card"><div class="info-label">Start Date & Time</div><div class="info-value muted" id="infoStart">Not set</div></div>
                 <div class="info-card"><div class="info-label">End Date & Time</div><div class="info-value muted" id="infoEnd">Not set</div></div>
+                <div class="info-card"><div class="info-label">Duration (Calculated)</div><div class="info-value muted" id="infoDuration">-</div></div>
+                <div class="info-card wide"><div class="info-label">Created At</div><div class="info-value muted" id="infoCreated">-</div></div>
+                <div class="info-card wide" id="infoCancelledCard" style="display:none;"><div class="info-label">Cancelled On</div><div class="info-value muted" id="infoCancelledAt">-</div></div>
+                <div class="info-card wide" id="infoReasonCard" style="display:none;"><div class="info-label">Cancellation Reason</div><div class="info-value muted" id="infoReason">-</div></div>
             </div>
 
-            <div class="action-row">
-                <button class="btn btn-primary" onclick="openNewEventModal()" id="newEventBtn">New Event</button>
-                <button class="btn btn-secondary" onclick="openEditModal()" id="editBtn">Edit Event</button>
-                <button class="btn btn-secondary" onclick="openCancelModal()" id="cancelBtn" style="display:none;">Cancel Event</button>
-                <button class="btn btn-danger" onclick="openDeleteModal()" id="deleteBtn" style="display:none;">Delete Event</button>
+            <div class="action-row" id="actionRow">
+                <button class="btn btn-primary" onclick="openNewEventModal()" id="newEventBtn" style="display:none;">+ New Event</button>
+                <button class="btn btn-secondary" onclick="openEditModal()" id="editBtn" style="display:none;">Edit Event</button>
+                <button class="btn btn-danger" onclick="openCancelModal()" id="cancelBtn" style="display:none;">Cancel Event</button>
                 <a href="/admin/history" class="btn btn-ghost" style="flex:0;min-width:auto;text-decoration:none;align-self:center;">${ICONS.history} History</a>
             </div>
 
             <div id="newEventModal" class="modal-overlay">
                 <div class="modal" style="max-width:520px;">
-                    <div class="modal-header"><h3>Start a New Event</h3><button class="modal-close" onclick="closeModal('newEventModal')">&times;</button></div>
-                    <p style="font-size:13px; color:var(--text-secondary); margin-bottom:16px;">This archives the current event to History, clears the current event's allocations and submissions, and creates a fresh event with a brand-new unique code.</p>
+                    <div class="modal-header"><h3>+ New Event</h3><button class="modal-close" onclick="closeModal('newEventModal')">&times;</button></div>
+                    <p style="font-size:13px; color:var(--text-secondary); margin-bottom:16px;">Set the start and end of the event. Duration is calculated automatically from these times.</p>
                     <form id="newEventForm">
-                        <div class="form-group"><label>Event Name</label><input type="text" id="newEventName" value="Legacy Code Rescue" placeholder="Event name"></div>
-                        <div class="form-group"><label>Start Date & Time (optional)</label><input type="datetime-local" id="newStartTime"><small style="color:var(--text-muted); font-size:11px; margin-top:4px; display:block;">Leave blank to create an unscheduled event.</small></div>
-                        <div class="form-group"><label>End Date & Time (optional)</label><input type="datetime-local" id="newEndTime"></div>
-                        <div class="form-group"><label>Duration (minutes)</label><input type="number" id="newDuration" min="5" max="1440" value="300"><small style="color:var(--text-muted); font-size:11px; margin-top:4px; display:block;">Maximum time allowed per participant</small></div>
+                        <div class="form-group"><label>Start Date & Time <span style="color:var(--danger);">*</span></label><input type="datetime-local" id="newStartTime" required></div>
+                        <div class="form-group"><label>End Date & Time <span style="color:var(--danger);">*</span></label><input type="datetime-local" id="newEndTime" required><div class="duration-preview" id="newDurationPreview"></div></div>
                         <div class="modal-footer" style="border-top:none;padding-top:8px;">
                             <button type="button" class="btn btn-secondary" onclick="closeModal('newEventModal')">Cancel</button>
                             <button type="submit" class="btn btn-primary" id="newEventSubmitBtn">Start New Event</button>
@@ -100,20 +103,19 @@
 
             <div id="editModal" class="modal-overlay">
                 <div class="modal" style="max-width:520px;">
-                    <div class="modal-header"><h3>Edit Current Event</h3><button class="modal-close" onclick="closeModal('editModal')">&times;</button></div>
+                    <div class="modal-header"><h3>Edit Event</h3><button class="modal-close" onclick="closeModal('editModal')">&times;</button></div>
                     <form id="editForm">
-                        <div class="form-group"><label>Event Code</label><input type="text" id="editEventCode" readonly disabled style="opacity:0.6;cursor:not-allowed;font-family:var(--font-mono);"></div>
-                        <div class="form-group"><label>Event Name</label><input type="text" id="editName"></div>
+                        <div class="form-group"><label>Event Code</label><input type="text" id="editEventCode" readonly disabled class="readonly-field"></div>
+                        <div class="form-group"><label>Status</label><input type="text" id="editStatus" readonly disabled class="readonly-field"></div>
                         <div class="form-group"><label>Start Date & Time</label><input type="datetime-local" id="editStartTime"><small id="editStartHint" style="color:var(--text-muted); font-size:11px; margin-top:4px; display:block;"></small></div>
-                        <div class="form-group"><label>End Date & Time <span style="color:var(--danger);">*</span></label><input type="datetime-local" id="editEndTime" required></div>
-                        <div class="form-group"><label>Duration (minutes)</label><input type="number" id="editDuration" min="5" max="1440" value="300"></div>
+                        <div class="form-group"><label>End Date & Time <span style="color:var(--danger);">*</span></label><input type="datetime-local" id="editEndTime" required><div class="duration-preview" id="editDurationPreview"></div></div>
                         <div class="form-group form-check" style="display:flex; align-items:center; gap:8px;">
                             <input type="checkbox" id="editLeaderboard">
                             <label for="editLeaderboard" style="margin:0;">Enable public leaderboard</label>
                         </div>
                         <div class="modal-footer" style="border-top:none;padding-top:8px;">
                             <button type="button" class="btn btn-secondary" onclick="closeModal('editModal')">Cancel</button>
-                            <button type="submit" class="btn btn-primary" id="editSubmitBtn">Save Configuration</button>
+                            <button type="submit" class="btn btn-primary" id="editSubmitBtn">Save Changes</button>
                         </div>
                     </form>
                 </div>
@@ -122,26 +124,12 @@
             <div id="cancelModal" class="modal-overlay">
                 <div class="modal" style="max-width:480px;">
                     <div class="modal-header"><h3>Cancel Event</h3><button class="modal-close" onclick="closeModal('cancelModal')">&times;</button></div>
-                    <p style="font-size:13px; color:var(--text-secondary); margin-bottom:16px;">This will cancel the current event. Participants will not be able to continue submitting. This can be done without deleting the event.</p>
+                    <p style="font-size:13px; color:var(--text-secondary); margin-bottom:16px;">Cancelling ends this event. A cancellation reason is mandatory and the record remains available in History.</p>
                     <form id="cancelForm">
-                        <div class="form-group"><label>Reason</label><input type="text" id="cancelReason" placeholder="Reason for cancellation (optional)"></div>
+                        <div class="form-group"><label>Cancellation Reason <span style="color:var(--danger);">*</span></label><textarea id="cancelReason" rows="3" required placeholder="Explain why this event is being cancelled"></textarea></div>
                         <div class="modal-footer" style="border-top:none;padding-top:8px;">
-                            <button type="button" class="btn btn-secondary" onclick="closeModal('cancelModal')">Cancel</button>
-                            <button type="submit" class="btn btn-danger" id="cancelSubmitBtn">Confirm Cancellation</button>
-                        </div>
-                    </form>
-                </div>
-            </div>
-
-            <div id="deleteModal" class="modal-overlay">
-                <div class="modal" style="max-width:480px;">
-                    <div class="modal-header"><h3>Delete Event</h3><button class="modal-close" onclick="closeModal('deleteModal')">&times;</button></div>
-                    <p style="font-size:13px; color:var(--text-secondary); margin-bottom:16px;">Deleting archives this event to History and removes its allocations and submissions. This cannot be undone.</p>
-                    <form id="deleteForm">
-                        <div class="form-group"><label>Reason</label><input type="text" id="deleteReason" placeholder="Reason for deletion (optional)"></div>
-                        <div class="modal-footer" style="border-top:none;padding-top:8px;">
-                            <button type="button" class="btn btn-secondary" onclick="closeModal('deleteModal')">Cancel</button>
-                            <button type="submit" class="btn btn-danger" id="deleteSubmitBtn">Confirm Delete</button>
+                            <button type="button" class="btn btn-secondary" onclick="closeModal('cancelModal')">Back</button>
+                            <button type="submit" class="btn btn-danger" id="cancelSubmitBtn">Cancel Event</button>
                         </div>
                     </form>
                 </div>
@@ -149,7 +137,7 @@
         `;
 
         let currentEvent = null;
-        let currentComputedStatus = 'DRAFT';
+        let currentComputedStatus = 'NO_EVENT';
 
         function copyEventCode() {
             if (currentEvent && currentEvent.event_code) {
@@ -173,38 +161,40 @@
             return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
         }
 
+        function formatDuration(minutes) {
+            if (!minutes || isNaN(minutes)) return '-';
+            const h = Math.floor(minutes / 60), m = minutes % 60;
+            if (h > 0 && m > 0) return h + 'h ' + m + 'm';
+            if (h > 0) return h + 'h';
+            return m + 'm';
+        }
+
         function closeModal(id) {
             document.getElementById(id).classList.remove('active');
         }
 
         function openNewEventModal() {
-            if (currentEvent && currentEvent.event_start_time) {
-                document.getElementById('newStartTime').value = toLocalDatetimeValue(currentEvent.event_start_time);
-            }
-            if (currentEvent && currentEvent.event_end_time) {
-                document.getElementById('newEndTime').value = toLocalDatetimeValue(currentEvent.event_end_time);
-            }
-            if (currentEvent && currentEvent.event_duration_minutes) {
-                document.getElementById('newDuration').value = currentEvent.event_duration_minutes;
-            }
+            document.getElementById('newStartTime').value = '';
+            document.getElementById('newEndTime').value = '';
+            document.getElementById('newDurationPreview').textContent = '';
             document.getElementById('newEventModal').classList.add('active');
         }
 
         function openEditModal() {
             if (!currentEvent) { showError('error-msg', 'No event configured to edit'); return; }
             document.getElementById('editEventCode').value = currentEvent.event_code || '-';
-            document.getElementById('editName').value = currentEvent.event_name || '';
+            document.getElementById('editStatus').value = currentComputedStatus || '-';
             document.getElementById('editStartTime').value = currentEvent.event_start_time ? toLocalDatetimeValue(currentEvent.event_start_time) : '';
             document.getElementById('editEndTime').value = currentEvent.event_end_time ? toLocalDatetimeValue(currentEvent.event_end_time) : '';
-            document.getElementById('editDuration').value = currentEvent.event_duration_minutes || 300;
             document.getElementById('editLeaderboard').checked = !!currentEvent.leaderboard_enabled;
+            updateEditDurationPreview();
 
             const startInput = document.getElementById('editStartTime');
             const hint = document.getElementById('editStartHint');
-            if (currentComputedStatus === 'ONGOING' || currentComputedStatus === 'COMPLETED' || currentComputedStatus === 'CANCELLED') {
+            if (currentComputedStatus === 'ONGOING') {
                 startInput.disabled = true;
                 startInput.style.opacity = '0.5';
-                hint.textContent = currentComputedStatus === 'ONGOING' ? 'Start time cannot be changed while event is ongoing.' : '';
+                hint.textContent = 'Start time cannot be changed while the event is ongoing.';
             } else {
                 startInput.disabled = false;
                 startInput.style.opacity = '1';
@@ -218,24 +208,45 @@
             document.getElementById('cancelModal').classList.add('active');
         }
 
-        function openDeleteModal() {
-            document.getElementById('deleteReason').value = '';
-            document.getElementById('deleteModal').classList.add('active');
+        function updateNewDurationPreview() {
+            const st = document.getElementById('newStartTime').value;
+            const et = document.getElementById('newEndTime').value;
+            const preview = document.getElementById('newDurationPreview');
+            if (st && et) {
+                const diff = (new Date(et) - new Date(st)) / 60000;
+                if (diff > 0) preview.textContent = 'Duration: ' + formatDuration(diff);
+                else if (diff <= 0) preview.textContent = 'End must be after start';
+                else preview.textContent = '';
+            } else preview.textContent = '';
         }
+
+        function updateEditDurationPreview() {
+            const st = document.getElementById('editStartTime').value;
+            const et = document.getElementById('editEndTime').value;
+            const curStart = currentEvent && currentEvent.event_start_time && document.getElementById('editStartTime').disabled ? new Date(currentEvent.event_start_time) : null;
+            const startDt = st ? new Date(st) : curStart;
+            const preview = document.getElementById('editDurationPreview');
+            if (startDt && et) {
+                const diff = (new Date(et) - startDt) / 60000;
+                if (diff > 0) preview.textContent = 'Duration: ' + formatDuration(diff);
+                else if (diff <= 0) preview.textContent = 'End must be after start';
+            } else preview.textContent = '';
+        }
+
+        document.getElementById('newStartTime').addEventListener('change', updateNewDurationPreview);
+        document.getElementById('newEndTime').addEventListener('change', updateNewDurationPreview);
+        document.getElementById('editEndTime').addEventListener('change', updateEditDurationPreview);
 
         document.getElementById('newEventForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             hideError('error-msg'); hideSuccess('success-msg');
             const st = document.getElementById('newStartTime').value;
             const et = document.getElementById('newEndTime').value;
-            const dur = parseInt(document.getElementById('newDuration').value) || 300;
-            if (st && et && new Date(et) <= new Date(st)) { showError('error-msg', 'End time must be after start time'); return; }
+            if (!st || !et) { showError('error-msg', 'Start and End times are both required'); return; }
+            if (new Date(et) <= new Date(st)) { showError('error-msg', 'End time must be after start time'); return; }
             const btn = document.getElementById('newEventSubmitBtn');
             btn.disabled = true; btn.textContent = 'Creating...';
-            const name = document.getElementById('newEventName').value.trim() || 'Legacy Code Rescue';
-            const body = { event_name: name, event_duration_minutes: dur };
-            if (st) body.event_start_time = new Date(st).toISOString();
-            if (et) body.event_end_time = new Date(et).toISOString();
+            const body = { event_start_time: new Date(st).toISOString(), event_end_time: new Date(et).toISOString() };
             try {
                 const resp = await API.post('/api/admin/event/new', body);
                 const data = await resp.json();
@@ -243,7 +254,7 @@
                     closeModal('newEventModal');
                     showSuccess('success-msg', 'New event created. Code: <strong>' + escapeHtml(data.event_code) + '</strong>');
                     loadStatus();
-                } else { showError('error-msg', data.detail || 'Failed to create event'); }
+                } else { showError('error-msg', data.detail || data.message || 'Failed to create event'); }
             } catch (err) { showError('error-msg', err.message); }
             btn.disabled = false; btn.textContent = 'Start New Event';
         });
@@ -253,62 +264,41 @@
             hideError('error-msg'); hideSuccess('success-msg');
             const st = document.getElementById('editStartTime').value;
             const et = document.getElementById('editEndTime').value;
-            const dur = parseInt(document.getElementById('editDuration').value);
-            const name = document.getElementById('editName').value.trim();
             if (!et) { showError('error-msg', 'End time is required'); return; }
             const startDt = st ? new Date(st) : null;
-            const endDt = new Date(et);
-            if (startDt && endDt <= startDt) { showError('error-msg', 'End time must be after start time'); return; }
-            if (!dur || dur < 5) { showError('error-msg', 'Duration must be at least 5 minutes'); return; }
+            if (startDt && new Date(et) <= startDt) { showError('error-msg', 'End time must be after start time'); return; }
             const btn = document.getElementById('editSubmitBtn');
             btn.disabled = true; btn.textContent = 'Saving...';
-            const body = {
-                event_end_time: endDt.toISOString(),
-                event_duration_minutes: dur,
-                event_name: name,
-                leaderboard_enabled: document.getElementById('editLeaderboard').checked
-            };
+            const body = { event_end_time: new Date(et).toISOString(), leaderboard_enabled: document.getElementById('editLeaderboard').checked };
             if (startDt && !document.getElementById('editStartTime').disabled) {
                 body.event_start_time = startDt.toISOString();
             }
             try {
                 const resp = await API.put('/api/admin/event/current', body);
                 const data = await resp.json();
-                if (resp.ok) { closeModal('editModal'); showSuccess('success-msg', 'Event configuration saved'); loadStatus(); }
-                else { showError('error-msg', data.detail || 'Failed to save'); }
+                if (resp.ok) {
+                    closeModal('editModal');
+                    showSuccess('success-msg', 'Event configuration saved');
+                    loadStatus();
+                } else { showError('error-msg', data.detail || data.message || 'Failed to save'); }
             } catch (err) { showError('error-msg', err.message); }
-            btn.disabled = false; btn.textContent = 'Save Configuration';
+            btn.disabled = false; btn.textContent = 'Save Changes';
         });
 
         document.getElementById('cancelForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             hideError('error-msg'); hideSuccess('success-msg');
+            const reason = document.getElementById('cancelReason').value.trim();
+            if (!reason) { showError('error-msg', 'A cancellation reason is required'); return; }
             const btn = document.getElementById('cancelSubmitBtn');
             btn.disabled = true; btn.textContent = 'Cancelling...';
             try {
-                const resp = await API.post('/api/admin/event/cancel', { reason: document.getElementById('cancelReason').value });
+                const resp = await API.post('/api/admin/event/cancel', { reason: reason });
                 const data = await resp.json();
                 if (resp.ok) { closeModal('cancelModal'); showSuccess('success-msg', 'Event cancelled'); loadStatus(); }
-                else { showError('error-msg', data.detail || 'Failed to cancel'); }
+                else { showError('error-msg', data.detail || data.message || 'Failed to cancel'); }
             } catch (err) { showError('error-msg', err.message); }
-            btn.disabled = false; btn.textContent = 'Confirm Cancellation';
-        });
-
-        document.getElementById('deleteForm').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            hideError('error-msg'); hideSuccess('success-msg');
-            const btn = document.getElementById('deleteSubmitBtn');
-            btn.disabled = true; btn.textContent = 'Deleting...';
-            try {
-                const resp = await API.post('/api/admin/event/delete', {
-                    confirm: true,
-                    reason: document.getElementById('deleteReason').value || 'Event deleted by admin'
-                });
-                const data = await resp.json();
-                if (resp.ok) { closeModal('deleteModal'); showSuccess('success-msg', 'Event deleted'); loadStatus(); }
-                else { showError('error-msg', data.detail || 'Failed to delete'); }
-            } catch (err) { showError('error-msg', err.message); }
-            btn.disabled = false; btn.textContent = 'Confirm Delete';
+            btn.disabled = false; btn.textContent = 'Cancel Event';
         });
 
         async function loadStatus() {
@@ -318,16 +308,22 @@
                 if (!resp) return;
                 const data = await resp.json();
                 currentEvent = data.event;
-                currentComputedStatus = data.computed_status;
+                currentComputedStatus = data.computed_status || 'NO_EVENT';
 
                 const statusEl = document.getElementById('statusValue');
                 const heroEl = document.getElementById('statusHero');
-                const displayStatus = data.computed_status === 'DRAFT' ? 'No Event Configured' : data.computed_status;
+                const displayStatus = currentComputedStatus === 'NO_EVENT' ? 'No Event Configured' : currentComputedStatus;
                 statusEl.textContent = displayStatus;
-                statusEl.className = 'status-value ' + data.computed_status.toLowerCase();
-                heroEl.className = 'status-hero ' + data.computed_status.toLowerCase();
+                const cls = currentComputedStatus.toLowerCase();
+                statusEl.className = 'status-value ' + cls;
+                heroEl.className = 'status-hero ' + cls;
 
-                document.getElementById('cancelledBanner').style.display = data.computed_status === 'CANCELLED' ? 'flex' : 'none';
+                const cancelledBanner = document.getElementById('cancelledBanner');
+                if (currentComputedStatus === 'CANCELLED' && currentEvent) {
+                    cancelledBanner.style.display = 'flex';
+                    document.getElementById('cancelledBannerText').textContent =
+                        'This event has been cancelled. ' + (currentEvent.cancellation_reason ? 'Reason: ' + currentEvent.cancellation_reason : '');
+                } else { cancelledBanner.style.display = 'none'; }
 
                 const codeWrap = document.getElementById('eventCodeWrap');
                 if (currentEvent && currentEvent.event_code) {
@@ -336,28 +332,36 @@
                 } else { codeWrap.style.display = 'none'; }
 
                 if (currentEvent) {
-                    document.getElementById('infoName').textContent = currentEvent.event_name || '-';
                     document.getElementById('infoStart').textContent = currentEvent.event_start_time ? formatDateLocal(currentEvent.event_start_time) : 'Not set';
                     document.getElementById('infoEnd').textContent = currentEvent.event_end_time ? formatDateLocal(currentEvent.event_end_time) : 'Not set';
+                    document.getElementById('infoDuration').textContent = formatDuration(data.calculated_duration_minutes);
+                    document.getElementById('infoCreated').textContent = formatDateLocal(currentEvent.created_datetime);
+                    document.getElementById('infoCancelledCard').style.display = currentEvent.cancelled_at ? '' : 'none';
+                    document.getElementById('infoReasonCard').style.display = currentEvent.cancellation_reason ? '' : 'none';
+                    document.getElementById('infoCancelledAt').textContent = currentEvent.cancelled_at ? formatDateLocal(currentEvent.cancelled_at) : '-';
+                    document.getElementById('infoReason').textContent = currentEvent.cancellation_reason || '-';
                 } else {
-                    document.getElementById('infoName').textContent = '-';
                     document.getElementById('infoStart').textContent = 'Not set';
                     document.getElementById('infoEnd').textContent = 'Not set';
+                    document.getElementById('infoDuration').textContent = '-';
+                    document.getElementById('infoCreated').textContent = '-';
+                    document.getElementById('infoCancelledCard').style.display = 'none';
+                    document.getElementById('infoReasonCard').style.display = 'none';
                 }
 
+                const newEventBtn = document.getElementById('newEventBtn');
                 const editBtn = document.getElementById('editBtn');
                 const cancelBtn = document.getElementById('cancelBtn');
-                const deleteBtn = document.getElementById('deleteBtn');
-                const status = data.computed_status;
-                editBtn.style.display = status === 'DRAFT' ? 'none' : '';
-                cancelBtn.style.display = (status === 'UPCOMING' || status === 'ONGOING') ? '' : 'none';
-                deleteBtn.style.display = status === 'DRAFT' ? 'none' : '';
+                const active = (currentComputedStatus === 'UPCOMING' || currentComputedStatus === 'ONGOING');
+                newEventBtn.style.display = active ? 'none' : '';
+                editBtn.style.display = active ? '' : 'none';
+                cancelBtn.style.display = active ? '' : 'none';
 
                 const countdownEl = document.getElementById('countdownDisplay');
                 countdownEl.innerHTML = '';
-                if (data.computed_status === 'UPCOMING' && data.countdown_seconds !== null && data.countdown_seconds !== undefined) {
+                if (currentComputedStatus === 'UPCOMING' && data.countdown_seconds !== null && data.countdown_seconds !== undefined) {
                     startCountdown(data.countdown_seconds, 'countdownDisplay', 'Event starts in');
-                } else if (data.computed_status === 'ONGOING' && data.remaining_seconds !== null && data.remaining_seconds !== undefined) {
+                } else if (currentComputedStatus === 'ONGOING' && data.remaining_seconds !== null && data.remaining_seconds !== undefined) {
                     startCountdown(data.remaining_seconds, 'countdownDisplay', 'Time remaining');
                 }
             } catch (e) { console.error('Status load error:', e); }

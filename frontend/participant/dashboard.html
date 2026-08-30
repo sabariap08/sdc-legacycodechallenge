@@ -290,6 +290,12 @@
                     tcAccepted = data.accepted === true;
                 }
             } catch(e) { tcAccepted = false; }
+            updateIdeButtonState();
+        }
+
+        function updateIdeButtonState() {
+            const ideBtn = document.getElementById('openIdeBtn');
+            if (ideBtn) { ideBtn.disabled = !tcAccepted; }
         }
 
         async function acceptTC() {
@@ -301,8 +307,7 @@
                 if (resp && resp.ok) {
                     tcAccepted = true;
                     hideTCModal();
-                    const ideBtn = document.getElementById('openIdeBtn');
-                    if (ideBtn) { ideBtn.disabled = false; }
+                    updateIdeButtonState();
                 } else {
                     btn.disabled = false;
                     btn.textContent = 'Accept & Continue';
@@ -490,7 +495,15 @@
                     }
                 }
             } else {
-                document.getElementById('challengeInfo').innerHTML = '<p style="color:var(--text-muted); font-size:15px;">Challenge not yet released</p><p style="color:var(--text-muted); font-size:13px; margin-top:4px;">Wait for the organizer to release allocations</p>';
+                let reason = 'Wait for the organizer to release allocations.';
+                if (!alloc) {
+                    reason = 'No challenge has been allocated to your team yet. The organizer has not assigned a challenge.';
+                } else if (!alloc.released) {
+                    reason = 'Your challenge allocation is pending release by the organizer.';
+                } else if (!alloc.challenge_code) {
+                    reason = 'Your allocation is missing a challenge. Contact the organizer.';
+                }
+                document.getElementById('challengeInfo').innerHTML = '<p style="color:var(--text-muted); font-size:15px;">Challenge not yet released</p><p style="color:var(--text-muted); font-size:13px; margin-top:4px;">' + reason + '</p>';
             }
 
             if (data.submission) {

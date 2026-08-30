@@ -106,7 +106,38 @@ def get_db():
     return db
 
 
+async def _drop_legacy_allocation_indexes():
+    """Remove stale legacy unique indexes on the allocations collection.
+
+    Older deployments created a single-field ``team_code`` unique index. It
+    conflicts with the current compound ``(team_code, event_id)`` unique index
+    and causes DuplicateKeyError 500s during allocation generation. Keep only
+    the intended indexes.
+    """
+    try:
+        indexes = await db.allocations.list_indexes().to_list(length=None)
+    except Exception as e:
+        logger.warning("Could not list allocations indexes: %s", e)
+        return
+    for idx in indexes:
+        name = idx.get("name", "")
+        keys = idx.get("key", {})
+        is_unique = idx.get("unique", False)
+        if not is_unique:
+            continue
+        field_names = list(keys.keys())
+        # Drop any legacy single-field unique index on team_code (or challenge_code)
+        if len(field_names) == 1 and field_names[0] in ("team_code", "challenge_code"):
+            if name not in ("team_code_1_event_id_1", "_id_"):
+                try:
+                    await db.allocations.drop_index(name)
+                    logger.info("Dropped legacy unique index %s on allocations", name)
+                except Exception as e:
+                    logger.warning("Could not drop legacy index %s on allocations: %s", name, e)
+
+
 async def _create_indexes():
+    await _drop_legacy_allocation_indexes()
     await db.teams.create_index("team_code", unique=True)
     await db.teams.create_index("team_name", unique=True)
     await db.teams.create_index("bin_number", unique=True)
@@ -152,11 +183,9 @@ async def _ensure_event_settings():
         await db.events.insert_one({
             "event_id": legacy.get("event_id") or str(_dt.utcnow().timestamp()),
             "event_code": legacy.get("event_code") or generate_event_code(),
-            "event_name": legacy.get("event_name", "Legacy Code Rescue"),
             "status": legacy.get("status", "UPCOMING"),
             "event_start_time": legacy.get("event_start_time"),
             "event_end_time": legacy.get("event_end_time"),
-            "event_duration_minutes": legacy.get("event_duration_minutes", 300),
             "leaderboard_enabled": legacy.get("leaderboard_enabled", False),
             "created_datetime": _dt.utcnow(),
             "updated_at": _dt.utcnow(),
@@ -168,11 +197,9 @@ async def _ensure_event_settings():
     await db.events.insert_one({
         "event_id": str(_dt.utcnow().timestamp()),
         "event_code": generate_event_code(),
-        "event_name": "Legacy Code Rescue",
         "status": "UPCOMING",
         "event_start_time": None,
         "event_end_time": None,
-        "event_duration_minutes": 300,
         "leaderboard_enabled": False,
         "created_datetime": _dt.utcnow(),
         "updated_at": _dt.utcnow(),
@@ -182,5 +209,8 @@ async def _ensure_event_settings():
 
 
 async def get_active_event():
-    """Return the current (non-deleted) event document, or None."""
-    return await db.events.find_one({"deleted_datetime": None})
+    """Return the newest current (non-deleted) event document, or None."""
+    return await db.events.find_one(
+        {"deleted_datetime": None},
+        sort=[("created_datetime", -1)],
+    )

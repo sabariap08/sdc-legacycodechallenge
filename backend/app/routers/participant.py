@@ -104,11 +104,17 @@ async def participant_dashboard(user=Depends(get_participant_user)):
         p.pop("_id", None)
         participants.append(p)
 
-    allocation = await db.allocations.find_one({"team_code": team_code})
-
     from app.events import get_current_event, compute_event_status
     event = await get_current_event()
     computed = compute_event_status(event) if event else "NO_EVENT"
+
+    # Allocations are scoped to the current event. No active event (or a
+    # cancelled / completed one) means NO challenge is surfaced, so a stale
+    # allocation from a previous event can never leak into the dashboard.
+    allocation = None
+    active = computed in ("UPCOMING", "ONGOING")
+    if active and event:
+        allocation = await db.allocations.find_one({"team_code": team_code, "event_id": event["event_id"]})
 
     now = datetime.utcnow()
     remaining_seconds = None
@@ -155,7 +161,6 @@ async def participant_dashboard(user=Depends(get_participant_user)):
         "team_name": team.get("team_name"),
         "participants": participants,
         "event_status": computed,
-        "event_name": event.get("event_name") if event else None,
         "event_code": event.get("event_code") if event else None,
         "event_id": event.get("event_id") if event else None,
         "event_start_time": event.get("event_start_time") if event else None,

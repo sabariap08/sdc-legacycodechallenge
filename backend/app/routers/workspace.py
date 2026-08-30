@@ -1,20 +1,33 @@
 import os
-import time
-import shutil
 import logging
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from app.database import get_db
+from app.database import get_db, is_db_available
 from app.security import get_participant_user
-from app.config import CHALLENGE_STORAGE_PATH, TEAM_WORKSPACE_PATH
 from app.utils import sanitize_path
 from app.events import get_current_event, compute_event_status
+from app.storage import (
+    exists_workspace,
+    copy_challenge_to_workspace,
+    get_workspace_tree_from_db,
+    get_workspace_file_from_db,
+    save_workspace_file_to_db,
+    has_evaluator,
+)
 from datetime import datetime
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/workspace", tags=["workspace"])
+
+
+async def _get_current_allocation(db, team_code: str):
+    event = await get_current_event()
+    if not event:
+        return None
+    return await db.allocations.find_one({"team_code": team_code, "event_id": event["event_id"]})
+
 
 BINARY_EXTENSIONS = {
     '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.svg',
@@ -25,108 +38,34 @@ BINARY_EXTENSIONS = {
     '.pyc', '.pyo', '.class', '.jar',
 }
 
-SKIP_DIRS = {'.git', '__pycache__', 'node_modules', '.venv', 'venv', 'env', '.idea', '.vscode', 'dist', 'build'}
 
-def _get_workspace_path(team_code: str, challenge_code: str) -> str:
-    return os.path.join(TEAM_WORKSPACE_PATH, team_code, challenge_code)
-
-async def _init_workspace_async(team_code: str, challenge_code: str) -> str:
-    workspace = _get_workspace_path(team_code, challenge_code)
-    if not os.path.exists(workspace):
-        source = os.path.join(CHALLENGE_STORAGE_PATH, challenge_code)
-        if os.path.exists(source):
-            shutil.copytree(source, workspace, dirs_exist_ok=True)
-        else:
-            os.makedirs(workspace, exist_ok=True)
-            try:
-                from app.storage import load_files_from_db
-                await load_files_from_db(challenge_code, source)
-                if os.path.exists(source) and os.listdir(source):
-                    shutil.copytree(source, workspace, dirs_exist_ok=True)
-            except Exception as e:
-                logger.warning("Could not recover challenge files from DB for %s: %s", challenge_code, e)
-    return workspace
-
-def _is_binary_file(file_path: str) -> bool:
-    try:
-        with open(file_path, 'rb') as f:
-            chunk = f.read(8192)
-            if b'\x00' in chunk:
-                return True
-    except Exception:
-        return True
-    return False
-
-def _get_file_size(file_path: str) -> int:
-    try:
-        return os.path.getsize(file_path)
-    except Exception:
-        return 0
-
-def _build_file_tree(root_path: str, rel_path: str = "") -> list:
-    tree = []
-    full = os.path.join(root_path, rel_path)
-    if not os.path.exists(full):
-        return tree
-    try:
-        entries = sorted(os.listdir(full))
-    except PermissionError:
-        return tree
-    for entry in entries:
-        if entry in SKIP_DIRS:
-            continue
-        entry_rel = os.path.join(rel_path, entry) if rel_path else entry
-        entry_full = os.path.join(root_path, entry_rel)
-        if os.path.isdir(entry_full):
-            children = _build_file_tree(root_path, entry_rel)
-            if children:
-                tree.append({
-                    "name": entry,
-                    "path": entry_rel.replace("\\", "/"),
-                    "type": "directory",
-                    "children": children,
-                })
-        else:
-            ext = os.path.splitext(entry)[1].lower()
-            size = _get_file_size(entry_full)
-            is_binary = ext in BINARY_EXTENSIONS or _is_binary_file(entry_full)
-            tree.append({
-                "name": entry,
-                "path": entry_rel.replace("\\", "/"),
-                "type": "file",
-                "size": size,
-                "binary": is_binary,
-                "editable": not is_binary and size < 1024 * 1024,
-            })
-    return tree
-
-def _is_file_editable(workspace: str, file_path: str) -> bool:
-    full = os.path.normpath(os.path.join(workspace, file_path))
-    if not full.startswith(os.path.normpath(workspace)):
+async def _ensure_workspace(team_code: str, challenge_code: str):
+    """DB-first: if the team has no workspace files yet, seed from the challenge repo."""
+    if not is_db_available():
         return False
-    if not os.path.isfile(full):
-        return False
-    ext = os.path.splitext(file_path)[1].lower()
-    if ext in BINARY_EXTENSIONS:
-        return False
-    size = _get_file_size(full)
-    if size > 1024 * 1024:
-        return False
-    if _is_binary_file(full):
-        return False
-    return True
+    has_files = await exists_workspace(team_code, challenge_code)
+    if not has_files:
+        await copy_challenge_to_workspace(team_code, challenge_code)
+        has_files = await exists_workspace(team_code, challenge_code)
+    return has_files
+
+
+def _is_binary_path(path: str) -> bool:
+    ext = os.path.splitext(path)[1].lower()
+    return ext in BINARY_EXTENSIONS
+
 
 @router.get("/tree")
 async def get_file_tree(user=Depends(get_participant_user)):
     db = get_db()
     team_code = user.get("sub")
-    alloc = await db.allocations.find_one({"team_code": team_code})
+    alloc = await _get_current_allocation(db, team_code)
     if not alloc or not alloc.get("released"):
         raise HTTPException(status_code=403, detail="Challenge not yet released")
 
     challenge_code = alloc["challenge_code"]
-    workspace = await _init_workspace_async(team_code, challenge_code)
-    tree = _build_file_tree(workspace)
+    await _ensure_workspace(team_code, challenge_code)
+    tree = await get_workspace_tree_from_db(team_code, challenge_code)
 
     total_files = 0
     total_dirs = 0
@@ -147,11 +86,12 @@ async def get_file_tree(user=Depends(get_participant_user)):
         "stats": {"files": total_files, "directories": total_dirs},
     }
 
+
 @router.get("/file")
 async def get_file(path: str, user=Depends(get_participant_user)):
     db = get_db()
     team_code = user.get("sub")
-    alloc = await db.allocations.find_one({"team_code": team_code})
+    alloc = await _get_current_allocation(db, team_code)
     if not alloc or not alloc.get("released"):
         raise HTTPException(status_code=403, detail="Challenge not yet released")
 
@@ -159,18 +99,16 @@ async def get_file(path: str, user=Depends(get_participant_user)):
     if not sanitize_path(path):
         raise HTTPException(status_code=400, detail="Invalid file path")
 
-    workspace = _get_workspace_path(team_code, challenge_code)
-    file_path = os.path.normpath(os.path.join(workspace, path))
+    if _is_binary_path(path):
+        raise HTTPException(status_code=400, detail="Binary file - cannot display or edit")
 
-    if not file_path.startswith(os.path.normpath(workspace)):
-        raise HTTPException(status_code=403, detail="Path traversal detected")
-
-    if not os.path.exists(file_path) or not os.path.isfile(file_path):
+    await _ensure_workspace(team_code, challenge_code)
+    file_data = await get_workspace_file_from_db(team_code, challenge_code, path)
+    if file_data is None:
         raise HTTPException(status_code=404, detail="File not found")
 
-    is_binary = _is_binary_file(file_path)
-    ext = os.path.splitext(path)[1].lower()
-    size = _get_file_size(file_path)
+    is_binary = file_data.get("binary", False)
+    size = file_data.get("size", 0)
     editable = not is_binary and size < 1024 * 1024
 
     if is_binary:
@@ -180,35 +118,25 @@ async def get_file(path: str, user=Depends(get_participant_user)):
             "binary": True,
             "editable": False,
             "size": size,
-            "extension": ext,
+            "extension": os.path.splitext(path)[1].lower(),
             "message": "Binary file - cannot display or edit",
         }
 
-    try:
-        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
-            content = f.read()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error reading file: {str(e)}")
-
-    mtime = 0
-    try:
-        mtime = os.path.getmtime(file_path)
-    except Exception:
-        pass
-
     return {
-        "content": content,
+        "content": file_data["content"],
         "path": path,
         "binary": False,
         "editable": editable,
         "size": size,
-        "extension": ext,
-        "modified": mtime,
+        "extension": os.path.splitext(path)[1].lower(),
+        "modified": file_data.get("modified") or 0,
     }
+
 
 class SaveFileRequest(BaseModel):
     path: str
     content: str
+
 
 @router.post("/file/save")
 async def save_file(body: SaveFileRequest, user=Depends(get_participant_user)):
@@ -219,7 +147,7 @@ async def save_file(body: SaveFileRequest, user=Depends(get_participant_user)):
     if cmps == "COMPLETED":
         raise HTTPException(status_code=403, detail="Event has ended. No more edits allowed.")
 
-    alloc = await db.allocations.find_one({"team_code": team_code})
+    alloc = await _get_current_allocation(db, team_code)
     if not alloc or not alloc.get("released"):
         raise HTTPException(status_code=403, detail="Challenge not yet released")
 
@@ -227,22 +155,18 @@ async def save_file(body: SaveFileRequest, user=Depends(get_participant_user)):
     if not sanitize_path(body.path):
         raise HTTPException(status_code=400, detail="Invalid file path")
 
-    workspace = _get_workspace_path(team_code, challenge_code)
-    file_path = os.path.normpath(os.path.join(workspace, body.path))
-
-    if not file_path.startswith(os.path.normpath(workspace)):
-        raise HTTPException(status_code=403, detail="Path traversal detected")
-
-    if not _is_file_editable(workspace, body.path):
+    if _is_binary_path(body.path):
         raise HTTPException(status_code=403, detail="File is not editable")
 
-    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+    if len(body.content.encode("utf-8")) > 1024 * 1024:
+        raise HTTPException(status_code=403, detail="File is too large to save")
 
-    try:
-        with open(file_path, "w", encoding="utf-8") as f:
-            f.write(body.content)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error saving file: {str(e)}")
+    await _ensure_workspace(team_code, challenge_code)
+    ok = await save_workspace_file_to_db(team_code, challenge_code, body.path, body.content)
+    if not ok:
+        raise HTTPException(status_code=500, detail="Error saving file")
+    if not await exists_workspace(team_code, challenge_code):
+        raise HTTPException(status_code=500, detail="Error saving file")
 
     await db.audit_logs.insert_one({
         "action": "file_saved",
@@ -253,8 +177,10 @@ async def save_file(body: SaveFileRequest, user=Depends(get_participant_user)):
 
     return {"message": "File saved successfully", "path": body.path}
 
+
 class BulkSaveRequest(BaseModel):
     files: list
+
 
 @router.post("/files/save")
 async def bulk_save_files(body: BulkSaveRequest, user=Depends(get_participant_user)):
@@ -265,12 +191,12 @@ async def bulk_save_files(body: BulkSaveRequest, user=Depends(get_participant_us
     if cmps == "COMPLETED":
         raise HTTPException(status_code=403, detail="Event has ended. No more edits allowed.")
 
-    alloc = await db.allocations.find_one({"team_code": team_code})
+    alloc = await _get_current_allocation(db, team_code)
     if not alloc or not alloc.get("released"):
         raise HTTPException(status_code=403, detail="Challenge not yet released")
 
     challenge_code = alloc["challenge_code"]
-    workspace = _get_workspace_path(team_code, challenge_code)
+    await _ensure_workspace(team_code, challenge_code)
     saved = []
 
     for item in body.files:
@@ -278,18 +204,12 @@ async def bulk_save_files(body: BulkSaveRequest, user=Depends(get_participant_us
         content = item.get("content", "")
         if not sanitize_path(path):
             continue
-        file_path = os.path.normpath(os.path.join(workspace, path))
-        if not file_path.startswith(os.path.normpath(workspace)):
+        if _is_binary_path(path):
             continue
-        if not _is_file_editable(workspace, path):
+        if len(content.encode("utf-8")) > 1024 * 1024:
             continue
-        try:
-            os.makedirs(os.path.dirname(file_path), exist_ok=True)
-            with open(file_path, "w", encoding="utf-8") as f:
-                f.write(content)
+        if await save_workspace_file_to_db(team_code, challenge_code, path, content):
             saved.append(path)
-        except Exception:
-            pass
 
     if saved:
         await db.audit_logs.insert_one({
@@ -301,11 +221,12 @@ async def bulk_save_files(body: BulkSaveRequest, user=Depends(get_participant_us
 
     return {"message": f"Saved {len(saved)} files", "saved": saved}
 
+
 @router.get("/code-details")
 async def get_code_details(user=Depends(get_participant_user)):
     db = get_db()
     team_code = user.get("sub")
-    alloc = await db.allocations.find_one({"team_code": team_code})
+    alloc = await _get_current_allocation(db, team_code)
     if not alloc or not alloc.get("released"):
         raise HTTPException(status_code=403, detail="Challenge not yet released")
 
@@ -317,7 +238,7 @@ async def get_code_details(user=Depends(get_participant_user)):
     event_start = event.get("event_start_time") if event else None
     event_end = event.get("event_end_time") if event else None
 
-    has_eval, eval_files = _has_evaluator(challenge_code)
+    has_eval, eval_files = await has_evaluator(challenge_code)
 
     return {
         "team_code": team_code,
@@ -333,14 +254,3 @@ async def get_code_details(user=Depends(get_participant_user)):
         "has_evaluator": has_eval,
         "evaluator_count": len(eval_files),
     }
-
-def _has_evaluator(challenge_code: str):
-    from app.config import EVALUATOR_PATH
-    evaluator_dir = os.path.join(EVALUATOR_PATH, challenge_code)
-    if not os.path.exists(evaluator_dir):
-        return False, []
-    test_files = sorted(
-        f for f in os.listdir(evaluator_dir)
-        if f.startswith("test_") and f.endswith(".py")
-    )
-    return bool(test_files), test_files

@@ -16,7 +16,6 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel
 from datetime import datetime
 from app.database import connect_db, close_db, is_db_available
-from app.config import CHALLENGE_STORAGE_PATH, TEAM_WORKSPACE_PATH, EVALUATOR_PATH
 from app.security import hash_password, verify_password, create_token
 from app.database import get_db
 
@@ -215,9 +214,6 @@ async def health_check():
 @app.on_event("startup")
 async def startup():
     logger.info("Starting up...")
-    os.makedirs(os.path.abspath(CHALLENGE_STORAGE_PATH), exist_ok=True)
-    os.makedirs(os.path.abspath(TEAM_WORKSPACE_PATH), exist_ok=True)
-    os.makedirs(os.path.abspath(EVALUATOR_PATH), exist_ok=True)
 
     db = await connect_db()
     if db is not None:
@@ -234,10 +230,10 @@ async def startup():
         except Exception as e:
             logger.error("Admin seed failed: %s", e)
         try:
-            from app.storage import recover_all_challenges
-            await recover_all_challenges()
+            from app.storage import sync_evaluators_from_disk
+            await sync_evaluators_from_disk()
         except Exception as e:
-            logger.error("Challenge recovery failed: %s", e)
+            logger.error("Evaluator sync failed: %s", e)
         logger.info("Startup complete!")
     else:
         logger.warning("Startup complete (MongoDB unavailable - will retry in background)")

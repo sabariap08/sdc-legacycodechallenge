@@ -4,20 +4,26 @@ import time
 import shutil
 import asyncio
 import tempfile
-import subprocess
 from enum import Enum
 from typing import Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from app.database import get_db
 from app.security import get_participant_user
-from app.config import TEAM_WORKSPACE_PATH, EVALUATOR_PATH
 from app.utils import sanitize_path
-from datetime import datetime
+from app.events import get_current_event
+from app.storage import load_workspace_files_from_db, load_evaluator_from_db, has_evaluator
 
 router = APIRouter(prefix="/api/execution", tags=["execution"])
 
 MAX_OUTPUT = 50000
+
+
+async def _get_current_allocation(db, team_code: str):
+    event = await get_current_event()
+    if not event:
+        return None
+    return await db.allocations.find_one({"team_code": team_code, "event_id": event["event_id"]})
 RUN_TIMEOUT = 30
 TEST_TIMEOUT = 60
 MAX_FILE_SIZE = 1024 * 1024
@@ -79,8 +85,21 @@ class ExecStatus(str, Enum):
 
 _jobs: Dict[str, Dict[str, Any]] = {}
 
-def _get_workspace(team_code: str, challenge_code: str) -> str:
-    return os.path.join(os.path.abspath(TEAM_WORKSPACE_PATH), team_code, challenge_code)
+
+async def _hydrate_workspace(team_code: str, challenge_code: str) -> str:
+    """Hydrate the team's workspace from Mongo into a private temp directory.
+
+    DB is the source of truth - the temp dir is used only for the execution and
+    removed once the run finishes, so no participant data ever persists on disk.
+    """
+    work_dir = tempfile.mkdtemp(prefix="lcr_exec_")
+    loaded = await load_workspace_files_from_db(team_code, challenge_code, work_dir)
+    if loaded == 0:
+        shutil.rmtree(work_dir, ignore_errors=True)
+        # Nothing persisted yet for this team workspace
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    return work_dir
+
 
 def _find_entry_file(workspace: str, file_path: str = None) -> Optional[str]:
     if file_path:
@@ -92,14 +111,16 @@ def _find_entry_file(workspace: str, file_path: str = None) -> Optional[str]:
     for name in priorities:
         if os.path.exists(os.path.join(workspace, name)):
             return name
-    for f in sorted(os.listdir(workspace)):
+    entries = sorted(os.listdir(workspace))
+    for f in entries:
         if os.path.isfile(os.path.join(workspace, f)):
             ext = os.path.splitext(f)[1].lower()
             if ext in LANGUAGES and not f.startswith("test_"):
                 return f
     return None
 
-def _resolve_command(template: str, file_path: str, workspace: str) -> str:
+
+def _resolve_command(template: str, file_path: str) -> str:
     base = os.path.splitext(file_path)[0]
     cmd = template.replace("{file}", file_path)
     cmd = cmd.replace("{class}", os.path.basename(base))
@@ -107,13 +128,16 @@ def _resolve_command(template: str, file_path: str, workspace: str) -> str:
     cmd = cmd.replace("{dir}", os.path.dirname(file_path) or ".")
     return cmd
 
+
 def _build_compile_args(lang_config: dict, file_path: str) -> Optional[list]:
     if not lang_config.get("compile"):
         return None
-    return [_resolve_command(p, file_path, "") for p in lang_config["compile"]]
+    return [_resolve_command(p, file_path) for p in lang_config["compile"]]
+
 
 def _build_run_args(lang_config: dict, file_path: str) -> list:
-    return [_resolve_command(p, file_path, "") for p in lang_config["run"]]
+    return [_resolve_command(p, file_path) for p in lang_config["run"]]
+
 
 def _clean_env() -> dict:
     sensitive = {
@@ -137,6 +161,7 @@ def _clean_env() -> dict:
     env["HOMEBREW_NO_AUTO_UPDATE"] = "1"
     return env
 
+
 def _make_job(team_code: str, challenge_code: str, job_type: str) -> dict:
     job_id = str(uuid.uuid4())[:12]
     job = {
@@ -156,6 +181,7 @@ def _make_job(team_code: str, challenge_code: str, job_type: str) -> dict:
     }
     _jobs[job_id] = job
     return job
+
 
 async def _run_compile(job: dict, workspace: str, file_path: str, lang_config: dict) -> bool:
     compile_args = _build_compile_args(lang_config, file_path)
@@ -200,6 +226,7 @@ async def _run_compile(job: dict, workspace: str, file_path: str, lang_config: d
         job["stderr"] = f"Compilation error: {str(e)}"
         job["execution_time"] = round(time.time() - start, 2)
         return False
+
 
 async def _run_execute(job: dict, workspace: str, file_path: str, lang_config: dict, stdin_data: str = ""):
     run_args = _build_run_args(lang_config, file_path)
@@ -248,6 +275,7 @@ async def _run_execute(job: dict, workspace: str, file_path: str, lang_config: d
         job["stderr"] = f"Execution error: {str(e)}"
         job["execution_time"] = round(time.time() - start, 2)
 
+
 async def _execute_job(job: dict, workspace: str, file_path: str, lang_config: dict, stdin_data: str = ""):
     job["status"] = ExecStatus.RUNNING.value
     job["language"] = lang_config["name"]
@@ -257,15 +285,6 @@ async def _execute_job(job: dict, workspace: str, file_path: str, lang_config: d
             return
     await _run_execute(job, workspace, file_path, lang_config, stdin_data)
 
-def _has_evaluator(challenge_code: str):
-    evaluator_dir = os.path.join(EVALUATOR_PATH, challenge_code)
-    if not os.path.exists(evaluator_dir):
-        return False, []
-    test_files = sorted(
-        f for f in os.listdir(evaluator_dir)
-        if f.startswith("test_") and f.endswith(".py")
-    )
-    return bool(test_files), test_files
 
 def _has_workspace_tests(workspace: str):
     test_files = sorted(
@@ -282,101 +301,106 @@ def _has_workspace_tests(workspace: str):
             return True, []
     return False, []
 
+
 class RunRequest(BaseModel):
     stdin: Optional[str] = None
     file_path: Optional[str] = None
+
 
 @router.post("/run")
 async def run_code(body: RunRequest, user=Depends(get_participant_user)):
     db = get_db()
     team_code = user.get("sub")
-    alloc = await db.allocations.find_one({"team_code": team_code})
+    alloc = await _get_current_allocation(db, team_code)
     if not alloc or not alloc.get("released"):
         raise HTTPException(status_code=403, detail="Challenge not yet released")
 
     challenge_code = alloc["challenge_code"]
-    workspace = _get_workspace(team_code, challenge_code)
-    if not os.path.exists(workspace):
-        raise HTTPException(status_code=404, detail="Workspace not found")
+    workspace = await _hydrate_workspace(team_code, challenge_code)
+    try:
+        run_file = body.file_path
+        if run_file:
+            if not sanitize_path(run_file):
+                raise HTTPException(status_code=400, detail="Invalid file path")
+            full = os.path.normpath(os.path.join(workspace, run_file))
+            if not full.startswith(os.path.normpath(workspace)):
+                raise HTTPException(status_code=403, detail="Path traversal detected")
+            if not os.path.isfile(full):
+                raise HTTPException(status_code=404, detail="File not found")
 
-    run_file = body.file_path
-    if run_file:
-        if not sanitize_path(run_file):
-            raise HTTPException(status_code=400, detail="Invalid file path")
-        full = os.path.normpath(os.path.join(workspace, run_file))
-        if not full.startswith(os.path.normpath(workspace)):
-            raise HTTPException(status_code=403, detail="Path traversal detected")
-        if not os.path.isfile(full):
-            raise HTTPException(status_code=404, detail="File not found")
+        entry = _find_entry_file(workspace, run_file)
+        if not entry:
+            return {
+                "stdout": "",
+                "stderr": "No executable file found. Open a source file and click Run.",
+                "exit_code": -1,
+                "execution_time": 0,
+                "status": "error",
+                "language": "unknown",
+            }
 
-    entry = _find_entry_file(workspace, run_file)
-    if not entry:
+        ext = os.path.splitext(entry)[1].lower()
+        lang_config = LANGUAGES.get(ext)
+        if not lang_config:
+            return {
+                "stdout": "",
+                "stderr": f"Unsupported file type: {ext}. Supported: {', '.join(sorted(set(l['name'] for l in LANGUAGES.values())))}",
+                "exit_code": -1,
+                "execution_time": 0,
+                "status": "error",
+                "language": ext,
+            }
+
+        job = _make_job(team_code, challenge_code, "run")
+        await _execute_job(job, workspace, entry, lang_config, body.stdin or "")
+
+        _log_execution(team_code, challenge_code, job)
+
         return {
-            "stdout": "",
-            "stderr": "No executable file found. Open a source file and click Run.",
-            "exit_code": -1,
-            "execution_time": 0,
-            "status": "error",
-            "language": "unknown",
+            "stdout": job["stdout"],
+            "stderr": job["stderr"],
+            "exit_code": job["exit_code"],
+            "execution_time": job["execution_time"],
+            "status": job["status"],
+            "language": job["language"],
+            "job_id": job["id"],
         }
+    finally:
+        shutil.rmtree(workspace, ignore_errors=True)
 
-    ext = os.path.splitext(entry)[1].lower()
-    lang_config = LANGUAGES.get(ext)
-    if not lang_config:
-        return {
-            "stdout": "",
-            "stderr": f"Unsupported file type: {ext}. Supported: {', '.join(sorted(set(l['name'] for l in LANGUAGES.values())))}",
-            "exit_code": -1,
-            "execution_time": 0,
-            "status": "error",
-            "language": ext,
-        }
-
-    job = _make_job(team_code, challenge_code, "run")
-    await _execute_job(job, workspace, entry, lang_config, body.stdin or "")
-
-    _log_execution(team_code, challenge_code, job)
-
-    return {
-        "stdout": job["stdout"],
-        "stderr": job["stderr"],
-        "exit_code": job["exit_code"],
-        "execution_time": job["execution_time"],
-        "status": job["status"],
-        "language": job["language"],
-        "job_id": job["id"],
-    }
 
 class TestRequest(BaseModel):
     stdin: Optional[str] = None
+
 
 @router.post("/test")
 async def test_code(body: TestRequest, user=Depends(get_participant_user)):
     db = get_db()
     team_code = user.get("sub")
-    alloc = await db.allocations.find_one({"team_code": team_code})
+    alloc = await _get_current_allocation(db, team_code)
     if not alloc or not alloc.get("released"):
         raise HTTPException(status_code=403, detail="Challenge not yet released")
 
     challenge_code = alloc["challenge_code"]
-    workspace = _get_workspace(team_code, challenge_code)
-    if not os.path.exists(workspace):
-        raise HTTPException(status_code=404, detail="Workspace not found")
+    workspace = await _hydrate_workspace(team_code, challenge_code)
+    try:
+        has_eval, eval_files = await has_evaluator(challenge_code)
+        if has_eval:
+            return await _run_evaluator_tests(workspace, challenge_code, team_code)
 
-    has_eval, eval_files = _has_evaluator(challenge_code)
-    if has_eval:
-        return await _run_evaluator_tests(workspace, challenge_code, team_code, eval_files)
+        has_ws, ws_test_files = _has_workspace_tests(workspace)
+        if has_ws:
+            return await _run_pytest(workspace, ws_test_files)
 
-    has_ws, ws_test_files = _has_workspace_tests(workspace)
-    if has_ws:
-        return await _run_pytest(workspace, ws_test_files)
+        return {
+            "configured": False,
+            "message": "Automated testing is not configured for this challenge.",
+            "results": [],
+            "exit_code": 0,
+        }
+    finally:
+        shutil.rmtree(workspace, ignore_errors=True)
 
-    return {
-        "configured": False,
-        "message": "Automated testing is not configured for this challenge.",
-        "results": [],
-        "exit_code": 0,
-    }
 
 @router.post("/cancel/{job_id}")
 async def cancel_execution(job_id: str, user=Depends(get_participant_user)):
@@ -394,6 +418,7 @@ async def cancel_execution(job_id: str, user=Depends(get_participant_user)):
     job["status"] = ExecStatus.CANCELLED.value
     job["completed_at"] = time.time()
     return {"message": "Execution cancelled", "job_id": job_id}
+
 
 @router.get("/jobs/{job_id}")
 async def get_job_status(job_id: str, user=Depends(get_participant_user)):
@@ -421,9 +446,9 @@ async def get_job_status(job_id: str, user=Depends(get_participant_user)):
         "language": job["language"],
     }
 
+
 def _log_execution(team_code: str, challenge_code: str, job: dict):
     try:
-        import logging
         logger = logging.getLogger("execution")
         logger.info(
             "EXEC job=%s team=%s challenge=%s lang=%s status=%s time=%.2fs exit=%s",
@@ -434,44 +459,60 @@ def _log_execution(team_code: str, challenge_code: str, job: dict):
     except Exception:
         pass
 
-async def _run_evaluator_tests(workspace, challenge_code, team_code, test_files):
-    evaluator_dir = os.path.join(EVALUATOR_PATH, challenge_code)
+
+async def _run_evaluator_tests(workspace, challenge_code, team_code):
+    """Hydrate evaluator tests from DB into a temp dir and run them."""
+    evaluator_dir = tempfile.mkdtemp(prefix="lcr_eval_")
     results = []
     env = _clean_env()
-    for i, tf in enumerate(sorted(test_files), 1):
-        test_path = os.path.join(evaluator_dir, tf)
-        env_run = env.copy()
-        env_run["WORKSPACE_PATH"] = workspace
-        env_run["CHALLENGE_CODE"] = challenge_code
-        env_run["TEAM_CODE"] = team_code
-        start = time.time()
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "python3", test_path,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=workspace,
-                env=env_run,
-            )
+    try:
+        loaded = await load_evaluator_from_db(challenge_code, evaluator_dir)
+        test_files = sorted(f for f in os.listdir(evaluator_dir) if f.startswith("test_") and f.endswith(".py"))
+        if loaded == 0 or not test_files:
+            return {
+                "configured": True,
+                "message": "Evaluator tests no longer available.",
+                "results": [],
+                "exit_code": 0,
+                "total": 0,
+                "passed": 0,
+            }
+        for i, tf in enumerate(sorted(test_files), 1):
+            test_path = os.path.join(evaluator_dir, tf)
+            env_run = env.copy()
+            env_run["WORKSPACE_PATH"] = workspace
+            env_run["CHALLENGE_CODE"] = challenge_code
+            env_run["TEAM_CODE"] = team_code
+            start = time.time()
             try:
-                out, err = await asyncio.wait_for(proc.communicate(), timeout=TEST_TIMEOUT)
-            except asyncio.TimeoutError:
+                proc = await asyncio.create_subprocess_exec(
+                    "python3", test_path,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    cwd=workspace,
+                    env=env_run,
+                )
                 try:
-                    proc.kill()
-                except Exception:
-                    pass
-                results.append({"test": f"Test {i}", "passed": False, "reason": "Test timed out", "time": TEST_TIMEOUT})
-                continue
-            elapsed = round(time.time() - start, 2)
-            passed = proc.returncode == 0
-            results.append({
-                "test": f"Test {i}",
-                "passed": passed,
-                "reason": (out.decode("utf-8", errors="replace")[-500:].strip() if not passed else ""),
-                "time": elapsed,
-            })
-        except Exception as e:
-            results.append({"test": f"Test {i}", "passed": False, "reason": str(e), "time": 0})
+                    out, err = await asyncio.wait_for(proc.communicate(), timeout=TEST_TIMEOUT)
+                except asyncio.TimeoutError:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                    results.append({"test": f"Test {i}", "passed": False, "reason": "Test timed out", "time": TEST_TIMEOUT})
+                    continue
+                elapsed = round(time.time() - start, 2)
+                passed = proc.returncode == 0
+                results.append({
+                    "test": f"Test {i}",
+                    "passed": passed,
+                    "reason": (out.decode("utf-8", errors="replace")[-500:].strip() if not passed else ""),
+                    "time": elapsed,
+                })
+            except Exception as e:
+                results.append({"test": f"Test {i}", "passed": False, "reason": str(e), "time": 0})
+    finally:
+        shutil.rmtree(evaluator_dir, ignore_errors=True)
 
     passed_count = sum(1 for r in results if r["passed"])
     return {
@@ -482,6 +523,7 @@ async def _run_evaluator_tests(workspace, challenge_code, team_code, test_files)
         "total": len(results),
         "passed": passed_count,
     }
+
 
 async def _run_pytest(workspace, test_files):
     cmd = ["python3", "-m", "pytest"]

@@ -16,9 +16,17 @@ def _now():
 
 
 async def get_current_event():
-    """Return the active (non-deleted) event document or None."""
+    """Return the newest active (non-deleted) event document or None.
+
+    ``deleted_datetime is null`` marks an event as active. If more than one
+    active event exists (e.g. a stale event was never archived), the most
+    recently created one wins so the frontend and routers always agree.
+    """
     db = get_db()
-    return await db.events.find_one({"deleted_datetime": None})
+    return await db.events.find_one(
+        {"deleted_datetime": None},
+        sort=[("created_datetime", -1)],
+    )
 
 
 async def get_event_by_code(event_code: str):
@@ -55,17 +63,39 @@ def db_history():
     return get_db().event_history
 
 
-async def create_event(event_name: str = "Legacy Code Rescue", duration_minutes: int = 300):
+def get_event_duration_minutes(event: dict) -> int:
+    """Derive the event duration from persisted start/end times. Never stored."""
+    start = event.get("event_start_time")
+    end = event.get("event_end_time")
+    if not start or not end:
+        return 0
+    if isinstance(start, str):
+        try:
+            start = datetime.fromisoformat(str(start).replace("Z", "+00:00")).replace(tzinfo=None)
+        except (ValueError, TypeError):
+            return 0
+    if isinstance(end, str):
+        try:
+            end = datetime.fromisoformat(str(end).replace("Z", "+00:00")).replace(tzinfo=None)
+        except (ValueError, TypeError):
+            return 0
+    return max(0, int((end - start).total_seconds() // 60))
+
+
+async def create_event():
     """Soft-create a fresh event document. Existing non-deleted events are left
-    untouched; callers decide whether to archive first."""
+    untouched; callers decide whether to archive first.
+
+    The event model intentionally holds only lifecycle fields: event code,
+    start/end datetimes, status, created/timestamps and cancellation fields.
+    Duration is always derived from start/end and is never persisted.
+    """
     doc = {
         "event_id": str(int(_now().timestamp() * 1000)),
         "event_code": generate_event_code(),
-        "event_name": event_name or "Legacy Code Rescue",
         "status": "UPCOMING",
         "event_start_time": None,
         "event_end_time": None,
-        "event_duration_minutes": int(duration_minutes or 300),
         "leaderboard_enabled": False,
         "created_datetime": _now(),
         "updated_at": _now(),
@@ -87,11 +117,13 @@ async def archive_current_event(reason: str = "Archived"):
     archive_doc = {
         "event_id": event["event_id"],
         "event_code": event["event_code"],
-        "event_name": event.get("event_name", "Legacy Code Rescue"),
         "status": "CANCELLED" if event.get("status") == "CANCELLED" else status,
         "event_start_time": event.get("event_start_time"),
         "event_end_time": event.get("event_end_time"),
-        "event_duration_minutes": event.get("event_duration_minutes", 300),
+        "event_duration_minutes": event.get("event_duration_minutes"),
+        "created_datetime": event.get("created_datetime"),
+        "cancelled_at": event.get("cancelled_at"),
+        "cancellation_reason": event.get("cancellation_reason"),
         "archived_at": _now(),
         "archive_reason": reason,
     }
@@ -118,15 +150,22 @@ async def archive_current_event(reason: str = "Archived"):
 
 
 async def cancel_current_event(reason: str = "Cancelled by admin"):
-    """Cancel (CANCELLED) the active event without archiving/deleting it."""
+    """Cancel the active event: status -> CANCELLED with cancellation metadata.
+    The record is preserved (never destroyed) so it stays visible in History.
+    Requires a cancellation reason."""
     event = await get_current_event()
     if not event:
         return None
     await db_events().update_one(
         {"event_id": event["event_id"]},
-        {"$set": {"status": "CANCELLED", "updated_at": _now(), "cancelled_reason": reason}},
+        {"$set": {
+            "status": "CANCELLED",
+            "cancelled_at": _now(),
+            "cancellation_reason": reason,
+            "updated_at": _now(),
+        }},
     )
-    return await get_current_event()
+    return await get_event_by_id(event["event_id"])
 
 
 async def ensure_draft_event_exists():

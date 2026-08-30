@@ -236,12 +236,23 @@ async function loadFileTree() {
     try {
         var resp = await API.get('/api/workspace/tree');
         if (!resp) return;
+        if (!resp.ok) {
+            var errData = null;
+            try { errData = await resp.json(); } catch (e) {}
+            var detail = (errData && errData.detail) ? errData.detail : 'Could not load the challenge files.';
+            showIDEBlocked(detail);
+            return;
+        }
         var data = await resp.json();
-        fileTree = data.tree;
+        fileTree = data.tree || [];
+        if (!fileTree.length) {
+            showIDEBlocked('Challenge files are unavailable. The repository has no readable files - please contact the organizer.');
+            return;
+        }
         renderFileTree();
     } catch (err) {
         console.error('File tree error:', err);
-        document.getElementById('fileTree').innerHTML = '<div style="padding:16px;color:var(--ide-text-dim);font-size:12px;">Could not load files</div>';
+        showIDEBlocked('Could not load the challenge files. Please try again or contact the organizer.');
     }
 }
 

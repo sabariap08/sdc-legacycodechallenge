@@ -1,14 +1,22 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form, status
 from pydantic import BaseModel, EmailStr
 from typing import Optional, List
-from app.database import get_db
+from app.database import get_db, is_db_available
 from app.security import get_admin_user, verify_password, create_token, hash_password
 from app.utils import generate_team_code, generate_bin_number, compute_event_status
-from app.config import CHALLENGE_STORAGE_PATH
-from app.storage import save_files_to_db, get_file_tree_from_db, get_file_content_from_db, delete_files_from_db
+from app.storage import (
+    save_files_to_db,
+    get_file_tree_from_db,
+    get_file_content_from_db,
+    delete_files_from_db,
+    save_evaluator_to_db,
+    delete_evaluator_from_db,
+    delete_workspace_from_db,
+)
 from datetime import datetime
 import os
 import shutil
+import tempfile
 import zipfile
 import io
 import subprocess
@@ -188,7 +196,11 @@ async def get_team(team_code: str, admin=Depends(get_admin_user)):
         p["_id"] = str(p["_id"])
         p["is_blocked"] = p["email"] in blocked_emails
         participants.append(p)
-    allocation = await db.allocations.find_one({"team_code": team_code})
+    from app.events import get_current_event as _get_cur_ev
+    _cev = await _get_cur_ev()
+    allocation = await db.allocations.find_one(
+        {"team_code": team_code, "event_id": _cev["event_id"]} if _cev else {"team_code": team_code}
+    )
     if allocation:
         allocation["_id"] = str(allocation["_id"])
     submission = await db.submissions.find_one({"team_code": team_code}, sort=[("submitted_at", -1)])
@@ -377,35 +389,25 @@ def _is_dangerous_file(filename: str) -> bool:
     return False
 
 
-def _get_challenge_storage_path(challenge_code: str) -> str:
-    return os.path.join(os.path.abspath(CHALLENGE_STORAGE_PATH), challenge_code)
+async def _persist_from_temp_dir(challenge_code: str, disk_path: str) -> int:
+    """Store a challenge's repo + any evaluator tests found inside it into GridFS.
 
+    Returns number of repo files persisted. The temp dir is removed by callers.
+    """
+    files_persisted = await save_files_to_db(challenge_code, disk_path, full_sync=True)
 
-def _build_repo_file_tree(root_path: str, rel_path: str = "") -> list:
-    tree = []
-    full = os.path.join(root_path, rel_path)
-    if not os.path.exists(full):
-        return tree
-    ignore_dirs = {'.git', '__pycache__', 'node_modules', '.venv', 'venv', 'env', '.env'}
-    for entry in sorted(os.listdir(full)):
-        if entry in ignore_dirs:
-            continue
-        entry_rel = os.path.join(rel_path, entry) if rel_path else entry
-        entry_full = os.path.join(root_path, entry_rel)
-        if os.path.isdir(entry_full):
-            tree.append({
-                "name": entry,
-                "path": entry_rel.replace("\\", "/"),
-                "type": "directory",
-                "children": _build_repo_file_tree(root_path, entry_rel)
-            })
-        else:
-            tree.append({
-                "name": entry,
-                "path": entry_rel.replace("\\", "/"),
-                "type": "file"
-            })
-    return tree
+    # Evaluator tests inside the uploaded repo (e.g. evaluator/{code}/*.py or /tests)
+    evaluator_candidates = [
+        os.path.join(disk_path, "evaluator", challenge_code),
+        os.path.join(disk_path, "evaluator"),
+        os.path.join(disk_path, "tests"),
+    ]
+    for cand in evaluator_candidates:
+        if os.path.isdir(cand):
+            await save_evaluator_to_db(challenge_code, cand)
+            break
+
+    return files_persisted
 
 
 class ChallengeImport(BaseModel):
@@ -438,119 +440,130 @@ async def import_repositories(body: ImportRequest, admin=Depends(get_admin_user)
                 results.append({"challenge_code": challenge_code, "status": "FAILED", "error": "Invalid repository URL. Use a GitHub/GitLab/Bitbucket URL."})
                 continue
 
-            storage_path = _get_challenge_storage_path(challenge_code)
-            if os.path.exists(storage_path):
-                shutil.rmtree(storage_path)
-            os.makedirs(storage_path, exist_ok=True)
+            storage_path = tempfile.mkdtemp(prefix="lcr_import_")
+            try:
+                commit_sha = "unknown"
+                source = "link"
 
-            commit_sha = "unknown"
-            source = "link"
-
-            if "github.com" in url:
-                # Prefer GitHub codeload archive download (no git binary required, reliable on hosted platforms)
-                try:
-                    import httpx
-                    normalized = url.rstrip("/")
-                    if normalized.endswith(".git"):
-                        normalized = normalized[:-4]
-                    archive_url = normalized.rstrip("/") + "/archive/refs/heads/main.zip"
-                    with httpx.Client(timeout=120, follow_redirects=True) as c:
-                        r = c.get(archive_url)
-                        if r.status_code != 200:
-                            archive_url = normalized.rstrip("/") + "/archive/refs/heads/master.zip"
+                if "github.com" in url:
+                    # Prefer GitHub codeload archive download (no git binary required, reliable on hosted platforms)
+                    try:
+                        import httpx
+                        normalized = url.rstrip("/")
+                        if normalized.endswith(".git"):
+                            normalized = normalized[:-4]
+                        archive_url = normalized.rstrip("/") + "/archive/refs/heads/main.zip"
+                        with httpx.Client(timeout=120, follow_redirects=True) as c:
                             r = c.get(archive_url)
-                        if r.status_code != 200:
-                            raise HTTPException(status_code=400, detail=f"Could not fetch default branch: HTTP {r.status_code}")
-                        content = r.content
-                    with zipfile.ZipFile(io.BytesIO(content), 'r') as zf:
-                        topdir = None
-                        for info in zf.infolist():
-                            if info.is_dir():
-                                topdir = info.filename.rstrip("/")
-                                break
-                        if topdir:
+                            if r.status_code != 200:
+                                archive_url = normalized.rstrip("/") + "/archive/refs/heads/master.zip"
+                                r = c.get(archive_url)
+                            if r.status_code != 200:
+                                raise HTTPException(status_code=400, detail=f"Could not fetch default branch: HTTP {r.status_code}")
+                            content = r.content
+                        with zipfile.ZipFile(io.BytesIO(content), 'r') as zf:
+                            topdir = None
                             for info in zf.infolist():
                                 if info.is_dir():
-                                    continue
-                                if not info.filename.startswith(topdir + "/"):
-                                    continue
-                                rel = info.filename[len(topdir) + 1:]
-                                if not rel:
-                                    continue
-                                target = os.path.join(storage_path, rel)
-                                os.makedirs(os.path.dirname(target), exist_ok=True)
-                                with open(target, "wb") as out:
-                                    out.write(zf.read(info))
-                        else:
-                            zf.extractall(storage_path)
-                    commit_sha = "github-archive"
-                    source = "link"
-                except Exception as e:
-                    # Fall back to git clone
-                    clone_ok = False
+                                    topdir = info.filename.rstrip("/")
+                                    break
+                            if topdir:
+                                for info in zf.infolist():
+                                    if info.is_dir():
+                                        continue
+                                    if not info.filename.startswith(topdir + "/"):
+                                        continue
+                                    rel = info.filename[len(topdir) + 1:]
+                                    if not rel:
+                                        continue
+                                    target = os.path.join(storage_path, rel)
+                                    os.makedirs(os.path.dirname(target), exist_ok=True)
+                                    with open(target, "wb") as out:
+                                        out.write(zf.read(info))
+                            else:
+                                zf.extractall(storage_path)
+                        commit_sha = "github-archive"
+                        source = "link"
+                    except Exception as e:
+                        # Fall back to git clone
+                        clone_ok = False
+                        try:
+                            result = subprocess.run(
+                                ["git", "clone", "--depth", "1", url, storage_path],
+                                capture_output=True, text=True, timeout=120
+                            )
+                            if result.returncode == 0:
+                                clone_ok = True
+                            else:
+                                results.append({"challenge_code": challenge_code, "status": "FAILED", "error": f"Git clone failed: {result.stderr.strip()}"})
+                                continue
+                        except subprocess.TimeoutExpired:
+                            results.append({"challenge_code": challenge_code, "status": "FAILED", "error": "Git clone timed out"})
+                            continue
+                        except Exception as e2:
+                            results.append({"challenge_code": challenge_code, "status": "FAILED", "error": f"Git unavailable: {e2}"})
+                            continue
+                        if clone_ok:
+                            sha_result = subprocess.run(
+                                ["git", "-C", storage_path, "rev-parse", "HEAD"],
+                                capture_output=True, text=True
+                            )
+                            commit_sha = sha_result.stdout.strip() if sha_result.returncode == 0 else "unknown"
+                else:
+                    # Non-GitHub: use git clone
                     try:
                         result = subprocess.run(
                             ["git", "clone", "--depth", "1", url, storage_path],
                             capture_output=True, text=True, timeout=120
                         )
-                        if result.returncode == 0:
-                            clone_ok = True
-                        else:
-                            results.append({"challenge_code": challenge_code, "status": "FAILED", "error": f"Git clone failed: {result.stderr.strip()}"})
+                        if result.returncode != 0:
+                            results.append({"challenge_code": challenge_code, "status": "FAILED", "error": result.stderr.strip()})
                             continue
                     except subprocess.TimeoutExpired:
-                        results.append({"challenge_code": challenge_code, "status": "FAILED", "error": "Git clone timed out"})
+                        results.append({"challenge_code": challenge_code, "status": "FAILED", "error": "Clone timed out"})
                         continue
-                    except Exception as e2:
-                        results.append({"challenge_code": challenge_code, "status": "FAILED", "error": f"Git unavailable: {e2}"})
-                        continue
-                    if clone_ok:
-                        sha_result = subprocess.run(
-                            ["git", "-C", storage_path, "rev-parse", "HEAD"],
-                            capture_output=True, text=True
-                        )
-                        commit_sha = sha_result.stdout.strip() if sha_result.returncode == 0 else "unknown"
-            else:
-                # Non-GitHub: use git clone
-                try:
-                    result = subprocess.run(
-                        ["git", "clone", "--depth", "1", url, storage_path],
-                        capture_output=True, text=True, timeout=120
+
+                existing = await db.challenges.find_one({"challenge_code": challenge_code})
+                challenge_doc = {
+                    "challenge_code": challenge_code,
+                    "challenge_name": challenge_code,
+                    "repository_source": source,
+                    "repository_url": url,
+                    "language": "auto",
+                    "difficulty": "medium",
+                    "commit_sha": commit_sha,
+                    "setup_instructions": "",
+                    "testing_instructions": "",
+                    "imported_at": datetime.utcnow(),
+                    "status": "READY",
+                    "storage_path": "",
+                }
+
+                if existing:
+                    await db.challenges.update_one(
+                        {"challenge_code": challenge_code},
+                        {"$set": challenge_doc}
                     )
-                    if result.returncode != 0:
-                        results.append({"challenge_code": challenge_code, "status": "FAILED", "error": result.stderr.strip()})
-                        continue
-                except subprocess.TimeoutExpired:
-                    results.append({"challenge_code": challenge_code, "status": "FAILED", "error": "Clone timed out"})
-                    continue
+                else:
+                    await db.challenges.insert_one(challenge_doc)
 
-            existing = await db.challenges.find_one({"challenge_code": challenge_code})
-            challenge_doc = {
-                "challenge_code": challenge_code,
-                "challenge_name": challenge_code,
-                "repository_source": source,
-                "repository_url": url,
-                "language": "auto",
-                "difficulty": "medium",
-                "commit_sha": commit_sha,
-                "setup_instructions": "",
-                "testing_instructions": "",
-                "imported_at": datetime.utcnow(),
-                "status": "READY",
-                "storage_path": storage_path
-            }
+                files_persisted = await _persist_from_temp_dir(challenge_code, storage_path)
 
-            if existing:
-                await db.challenges.update_one(
-                    {"challenge_code": challenge_code},
-                    {"$set": challenge_doc}
-                )
-            else:
-                await db.challenges.insert_one(challenge_doc)
-
-            await save_files_to_db(challenge_code, storage_path)
-
-            results.append({"challenge_code": challenge_code, "status": "READY", "commit_sha": commit_sha})
+                result_entry = {
+                    "challenge_code": challenge_code,
+                    "status": "READY",
+                    "commit_sha": commit_sha,
+                    "files_persisted": files_persisted,
+                }
+                if files_persisted == 0 and is_db_available():
+                    result_entry["warning"] = (
+                        "Repository files could not be stored in the database. "
+                        "They will be lost after the server restarts - please re-import."
+                    )
+                    logger.error("Import for %s persisted 0 files to MongoDB", challenge_code)
+                results.append(result_entry)
+            finally:
+                shutil.rmtree(storage_path, ignore_errors=True)
 
         except subprocess.TimeoutExpired:
             results.append({"challenge_code": ch.challenge_code, "status": "FAILED", "error": "Clone timed out"})
@@ -597,10 +610,7 @@ async def upload_challenge(
     if len(content) > 100 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="File too large (max 100MB)")
 
-    storage_path = _get_challenge_storage_path(challenge_code)
-    if os.path.exists(storage_path):
-        shutil.rmtree(storage_path)
-    os.makedirs(storage_path, exist_ok=True)
+    storage_path = tempfile.mkdtemp(prefix="lcr_upload_")
 
     try:
         with zipfile.ZipFile(io.BytesIO(content), 'r') as zf:
@@ -615,12 +625,10 @@ async def upload_challenge(
             zf.extractall(storage_path)
 
     except zipfile.BadZipFile:
-        if os.path.exists(storage_path):
-            shutil.rmtree(storage_path)
+        shutil.rmtree(storage_path, ignore_errors=True)
         raise HTTPException(status_code=400, detail="Invalid or corrupted ZIP file")
     except HTTPException:
-        if os.path.exists(storage_path):
-            shutil.rmtree(storage_path)
+        shutil.rmtree(storage_path, ignore_errors=True)
         raise
 
     has_files = False
@@ -629,47 +637,53 @@ async def upload_challenge(
             has_files = True
             break
     if not has_files:
-        shutil.rmtree(storage_path)
+        shutil.rmtree(storage_path, ignore_errors=True)
         raise HTTPException(status_code=400, detail="ZIP file is empty (no files found)")
 
-    existing = await db.challenges.find_one({"challenge_code": challenge_code})
-    challenge_doc = {
-        "challenge_code": challenge_code,
-        "challenge_name": challenge_name,
-        "repository_source": "upload",
-        "repository_url": "",
-        "language": "auto",
-        "difficulty": "medium",
-        "commit_sha": "",
-        "setup_instructions": "",
-        "testing_instructions": "",
-        "imported_at": datetime.utcnow(),
-        "status": "READY",
-        "storage_path": storage_path
-    }
+    try:
+        existing = await db.challenges.find_one({"challenge_code": challenge_code})
+        challenge_doc = {
+            "challenge_code": challenge_code,
+            "challenge_name": challenge_name,
+            "repository_source": "upload",
+            "repository_url": "",
+            "language": "auto",
+            "difficulty": "medium",
+            "commit_sha": "",
+            "setup_instructions": "",
+            "testing_instructions": "",
+            "imported_at": datetime.utcnow(),
+            "status": "READY",
+            "storage_path": "",
+        }
 
-    if existing:
-        await db.challenges.update_one(
-            {"challenge_code": challenge_code},
-            {"$set": challenge_doc}
-        )
-    else:
-        await db.challenges.insert_one(challenge_doc)
+        if existing:
+            await db.challenges.update_one(
+                {"challenge_code": challenge_code},
+                {"$set": challenge_doc}
+            )
+        else:
+            await db.challenges.insert_one(challenge_doc)
 
-    await save_files_to_db(challenge_code, storage_path)
+        files_persisted = await _persist_from_temp_dir(challenge_code, storage_path)
+        if files_persisted == 0 and is_db_available():
+            logger.error("Upload %s persisted 0 files to MongoDB", challenge_code)
 
-    await db.audit_logs.insert_one({
-        "action": "repository_upload",
-        "actor": admin.get("sub", "admin"),
-        "details": f"Uploaded challenge {challenge_code} ({challenge_name}) via file upload",
-        "timestamp": datetime.utcnow()
-    })
+        await db.audit_logs.insert_one({
+            "action": "repository_upload",
+            "actor": admin.get("sub", "admin"),
+            "details": f"Uploaded challenge {challenge_code} ({challenge_name}) via file upload",
+            "timestamp": datetime.utcnow()
+        })
 
-    return {
-        "message": f"Challenge {challenge_code} uploaded successfully",
-        "challenge_code": challenge_code,
-        "status": "READY"
-    }
+        return {
+            "message": f"Challenge {challenge_code} uploaded successfully",
+            "challenge_code": challenge_code,
+            "status": "READY",
+            "files_persisted": files_persisted
+        }
+    finally:
+        shutil.rmtree(storage_path, ignore_errors=True)
 
 
 @router.get("/challenges")
@@ -689,11 +703,22 @@ async def delete_challenge(challenge_code: str, admin=Depends(get_admin_user)):
     if not challenge:
         raise HTTPException(status_code=404, detail="Challenge not found")
 
-    storage_path = challenge.get("storage_path", "")
-    if storage_path and os.path.exists(storage_path):
-        shutil.rmtree(storage_path)
-
+    # 1) Drop the challenge repo GridFS bucket (DB source of truth - nothing on disk)
     await delete_files_from_db(challenge_code)
+
+    # 2) Drop evaluator GridFS bucket
+    await delete_evaluator_from_db(challenge_code)
+
+    # 3) Drop every team workspace bucket allocated to this challenge
+    try:
+        async for alloc in db.allocations.find({"challenge_code": challenge_code}):
+            team_code = alloc.get("team_code")
+            if team_code:
+                await delete_workspace_from_db(team_code, challenge_code)
+        await db.allocations.delete_many({"challenge_code": challenge_code})
+    except Exception as e:
+        logger.warning("Failed to clean workspaces for %s: %s", challenge_code, e)
+
     await db.challenges.delete_one({"challenge_code": challenge_code})
 
     await db.audit_logs.insert_one({
@@ -712,27 +737,10 @@ async def get_repo_file_tree(challenge_code: str, admin=Depends(get_admin_user))
     if not challenge:
         raise HTTPException(status_code=404, detail="Challenge not found")
 
-    storage_path = challenge.get("storage_path", "")
-    if storage_path and os.path.exists(storage_path):
-        tree = _build_repo_file_tree(storage_path)
-        if tree:
-            return {"tree": tree, "challenge_code": challenge_code, "challenge_name": challenge.get("challenge_name", challenge_code)}
-
+    # DB (GridFS) is the sole source of truth - NO files live on disk anymore.
     tree = await get_file_tree_from_db(challenge_code)
     if tree:
         return {"tree": tree, "challenge_code": challenge_code, "challenge_name": challenge.get("challenge_name", challenge_code)}
-
-    if storage_path and not os.path.exists(storage_path):
-        try:
-            os.makedirs(storage_path, exist_ok=True)
-            from app.storage import load_files_from_db
-            loaded = await load_files_from_db(challenge_code, storage_path)
-            if loaded > 0:
-                tree = _build_repo_file_tree(storage_path)
-                if tree:
-                    return {"tree": tree, "challenge_code": challenge_code, "challenge_name": challenge.get("challenge_name", challenge_code)}
-        except Exception as e:
-            logger.error("Auto-recovery failed for %s: %s", challenge_code, e)
 
     raise HTTPException(status_code=404, detail="Repository files not found. Try re-importing the repository.")
 
@@ -743,32 +751,10 @@ async def get_repo_file(challenge_code: str, path: str, admin=Depends(get_admin_
     if not challenge:
         raise HTTPException(status_code=404, detail="Challenge not found")
 
-    storage_path = challenge.get("storage_path", "")
-    if storage_path and os.path.exists(storage_path):
-        if _is_safe_path(path):
-            file_path = os.path.normpath(os.path.join(storage_path, path))
-            if file_path.startswith(os.path.normpath(storage_path)) and os.path.exists(file_path) and os.path.isfile(file_path):
-                max_size = 512 * 1024
-                file_size = os.path.getsize(file_path)
-                if file_size > max_size:
-                    return {"content": f"# File too large to display ({file_size} bytes). Maximum preview size is 512 KB.", "path": path, "truncated": True}
-                binary_extensions = {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.svg', '.webp',
-                                     '.exe', '.dll', '.so', '.dylib', '.bin', '.zip', '.tar', '.gz',
-                                     '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
-                                     '.mp3', '.mp4', '.avi', '.mov', '.wav', '.ogg'}
-                _, ext = os.path.splitext(file_path.lower())
-                if ext in binary_extensions:
-                    return {"content": f"# Binary file cannot be previewed ({file_size} bytes)", "path": path, "binary": True}
-                try:
-                    with open(file_path, "r", encoding="utf-8", errors="replace") as f:
-                        content = f.read()
-                    return {"content": content, "path": path, "binary": False}
-                except Exception:
-                    pass
-
     if not _is_safe_path(path):
         raise HTTPException(status_code=400, detail="Invalid file path")
 
+    # DB (GridFS) is the sole source of truth.
     content = await get_file_content_from_db(challenge_code, path)
     if content is not None:
         return {"content": content, "path": path, "binary": False}
@@ -811,19 +797,20 @@ async def get_current_event(admin=Depends(get_admin_user)):
         "computed_status": computed_status,
         "countdown_seconds": countdown_seconds,
         "remaining_seconds": remaining_seconds,
+        "calculated_duration_minutes": _calculated_duration_minutes(current),
     }
+
+
+def _calculated_duration_minutes(event: dict) -> int:
+    from app.events import get_event_duration_minutes
+    if not event:
+        return 0
+    return get_event_duration_minutes(event)
 
 
 @router.get("/event/status")
 async def get_event_status(admin=Depends(get_admin_user)):
     return await get_current_event(admin)
-
-
-class EventStart(BaseModel):
-    event_start_time: str
-    event_end_time: str
-    event_duration_minutes: int = 300
-    event_name: Optional[str] = "Legacy Code Rescue"
 
 
 def _parse_event_times(start_str: str, end_str: str):
@@ -837,167 +824,122 @@ def _parse_event_times(start_str: str, end_str: str):
     return start_dt, end_dt
 
 
-@router.post("/event/start")
-async def start_event(body: EventStart, admin=Depends(get_admin_user)):
-    db = get_db()
-    try:
-        start_dt = datetime.fromisoformat(body.event_start_time.replace("Z", "+00:00")).replace(tzinfo=None)
-        end_dt = datetime.fromisoformat(body.event_end_time.replace("Z", "+00:00")).replace(tzinfo=None)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid date format")
-    if end_dt <= start_dt:
-        raise HTTPException(status_code=400, detail="End time must be after start time")
-    if body.event_duration_minutes < 5 or body.event_duration_minutes > 1440:
-        raise HTTPException(status_code=400, detail="Duration must be between 5 and 1440 minutes")
-
-    from app.events import get_current_event as _get_current, create_event
-    existing = await _get_current()
-
-    if existing:
-        old_status = compute_event_status(existing)
-        if old_status in ("ONGOING", "UPCOMING", "CANCELLED"):
-            raise HTTPException(
-                status_code=400,
-                detail="Cannot start a new event while one is active, upcoming, or cancelled. Archive the current event first (Start a New Event)."
-            )
-        await db.events.update_one(
-            {"event_id": existing["event_id"]},
-            {"$set": {
-                "event_start_time": start_dt,
-                "event_end_time": end_dt,
-                "event_duration_minutes": body.event_duration_minutes,
-                "event_name": (body.event_name or "Legacy Code Rescue").strip(),
-                "status": "UPCOMING",
-                "updated_at": datetime.utcnow(),
-                "created_by": admin.get("sub", "admin"),
-            }}
-        )
-        event = await _get_current()
-        event_code = event["event_code"]
-    else:
-        event = await create_event(event_name=body.event_name or "Legacy Code Rescue",
-                                   duration_minutes=body.event_duration_minutes)
-        await db.events.update_one(
-            {"event_id": event["event_id"]},
-            {"$set": {
-                "event_start_time": start_dt,
-                "event_end_time": end_dt,
-                "status": "UPCOMING",
-                "created_by": admin.get("sub", "admin"),
-                "updated_at": datetime.utcnow(),
-            }}
-        )
-        event = await _get_current()
-        event_code = event["event_code"]
-
-    await db.audit_logs.insert_one({
-        "action": "event_started",
-        "actor": admin.get("sub", "admin"),
-        "details": f"Event {event_code} scheduled. Start: {start_dt.isoformat()}, End: {end_dt.isoformat()}",
-        "timestamp": datetime.utcnow()
-    })
-
-    return {"message": "Event scheduled", "event_code": event_code, "event_start_time": start_dt.isoformat(), "event_end_time": end_dt.isoformat()}
-
-
 @router.post("/event/new")
 async def create_new_event(body: dict, admin=Depends(get_admin_user)):
-    """Start a New Event: archive the current one (clearing its per-event data),
-    then create a fresh event with a brand-new unique code."""
+    """Create a fresh event from ONLY Start/End times.
+
+    - Rejected while an UPCOMING or ONGOING event exists (must Edit/Cancel first).
+    - If the current event is COMPLETED or CANCELLED, it is archived to History
+      (soft delete) so exactly one event is ever active at a time.
+    - Event code is generated randomly and uniquely.
+    - Status is derived from the clock by ``compute_event_status``.
+    - Duration is computed from Start/End - never stored.
+    - Allocations and submissions are NOT touched by event creation.
+    """
     from app.events import get_current_event as _get_current, archive_current_event, create_event
     db = get_db()
 
-    current = await _get_current()
-    if current and compute_event_status(current) in ("ONGOING", "UPCOMING"):
-        reason = body.get("reason") or "New event started by admin"
-        await archive_current_event(reason)
-
-    event_name = (body.get("event_name") or "Legacy Code Rescue").strip()
-    duration = body.get("event_duration_minutes") or 300
-
     start_str = body.get("event_start_time")
     end_str = body.get("event_end_time")
+    if not start_str or not end_str:
+        raise HTTPException(status_code=400, detail="Start and End times are required")
+    start_dt, end_dt = _parse_event_times(start_str, end_str)
 
-    new_event = await create_event(event_name=event_name, duration_minutes=duration)
-
-    if start_str and end_str:
-        try:
-            start_dt, end_dt = _parse_event_times(start_str, end_str)
-            await db.events.update_one(
-                {"event_id": new_event["event_id"]},
-                {"$set": {"event_start_time": start_dt, "event_end_time": end_dt, "status": "UPCOMING"}}
+    current = await _get_current()
+    if current:
+        current_status = compute_event_status(current)
+        if current_status in ("UPCOMING", "ONGOING"):
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "An active event already exists. Edit or cancel it before "
+                    "creating a new event."
+                ),
             )
-        except HTTPException:
-            await db.events.update_one({"event_id": new_event["event_id"]}, {"$set": {"status": "UPCOMING"}})
+        await archive_current_event("Superseded by a new event")
+
+    new_event = await create_event()
+
+    await db.events.update_one(
+        {"event_id": new_event["event_id"]},
+        {"$set": {
+            "event_start_time": start_dt,
+            "event_end_time": end_dt,
+            "created_by": admin.get("sub", "admin"),
+            "updated_at": datetime.utcnow(),
+        }}
+    )
+
+    duration_minutes = _calculated_duration_minutes(new_event)
 
     await db.audit_logs.insert_one({
         "action": "event_created",
         "actor": admin.get("sub", "admin"),
-        "details": f"New event created with code {new_event['event_code']}",
+        "details": f"New event created with code {new_event['event_code']}. Start: {start_dt.isoformat()}, End: {end_dt.isoformat()}, Duration: {duration_minutes} min",
         "timestamp": datetime.utcnow()
     })
 
-    return {"message": "New event created", "event_code": new_event["event_code"], "event_id": new_event["event_id"]}
-
-
-class EventDelete(BaseModel):
-    confirm: bool = False
-    reason: Optional[str] = "Event deleted"
-
-
-@router.post("/event/delete")
-async def delete_current_event(body: EventDelete, admin=Depends(get_admin_user)):
-    """Delete the current event: archive it to history and mark it deleted."""
-    if not body.confirm:
-        raise HTTPException(status_code=400, detail="Must confirm deletion")
-    from app.events import get_current_event as _get_current, archive_current_event
-    db = get_db()
-    current = await _get_current()
-    if not current:
-        raise HTTPException(status_code=404, detail="No active event to delete")
-    archived = await archive_current_event(body.reason or "Event deleted by admin")
-    # Clean up event-scoped data so the system is fresh
-    event_id = current.get("event_id")
-    await db.allocations.delete_many({"event_id": event_id})
-    await db.submissions.delete_many({"event_id": event_id})
-    await db.audit_logs.insert_one({
-        "action": "event_deleted",
-        "actor": admin.get("sub", "admin"),
-        "details": f"Event {current.get('event_code')} deleted. Reason: {body.reason}",
-        "timestamp": datetime.utcnow()
-    })
-    return {"message": "Event deleted", "event_code": current.get("event_code")}
+    return {
+        "message": "New event created",
+        "event_code": new_event["event_code"],
+        "event_id": new_event["event_id"],
+        "event_start_time": start_dt.isoformat(),
+        "event_end_time": end_dt.isoformat(),
+        "calculated_duration_minutes": duration_minutes,
+        "status": compute_event_status(new_event),
+    }
 
 
 @router.post("/event/cancel")
 async def cancel_current_event(body: dict, admin=Depends(get_admin_user)):
-    """Cancel the current event (status -> CANCELLED) without deleting it."""
+    """Cancel the current event. A mandatory reason is required."""
     from app.events import get_current_event as _get_current, cancel_current_event
     db = get_db()
     current = await _get_current()
     if not current:
         raise HTTPException(status_code=404, detail="No active event to cancel")
-    reason = body.get("reason") or "Cancelled by admin"
-    await cancel_current_event(reason)
+
+    reason = (body.get("reason") or "").strip()
+    if not reason:
+        raise HTTPException(status_code=400, detail="A cancellation reason is required")
+
+    status = compute_event_status(current)
+    if status not in ("UPCOMING", "ONGOING"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"A {status} event cannot be cancelled. Start a new event instead.",
+        )
+
+    cancelled = await cancel_current_event(reason)
     await db.audit_logs.insert_one({
         "action": "event_cancelled",
         "actor": admin.get("sub", "admin"),
         "details": f"Event {current.get('event_code')} cancelled. Reason: {reason}",
         "timestamp": datetime.utcnow()
     })
-    return {"message": "Event cancelled", "event_code": current.get("event_code")}
+    return {
+        "message": "Event cancelled",
+        "event_code": current.get("event_code"),
+        "cancelled_at": cancelled.get("cancelled_at"),
+        "cancellation_reason": reason,
+    }
 
 
 class EventUpdate(BaseModel):
     event_start_time: Optional[str] = None
     event_end_time: Optional[str] = None
-    event_duration_minutes: Optional[int] = None
-    event_name: Optional[str] = None
     leaderboard_enabled: Optional[bool] = None
 
 
 @router.put("/event/current")
 async def update_current_event(body: EventUpdate, admin=Depends(get_admin_user)):
+    """Edit the active event (UPCOMING or ONGOING only).
+
+    - UPCOMING: start and end both editable.
+    - ONGOING: start is locked; only end may change (start change is rejected).
+    - Event code is never regenerated and status is never manually edited.
+    - Duration is recomputed from the persisted times on every read.
+    """
     from app.events import get_current_event as _get_current
     db = get_db()
     event = await _get_current()
@@ -1005,59 +947,59 @@ async def update_current_event(body: EventUpdate, admin=Depends(get_admin_user))
         raise HTTPException(status_code=404, detail="No event configured")
 
     computed = compute_event_status(event)
-    if computed == "COMPLETED":
-        raise HTTPException(status_code=400, detail="Cannot modify a completed event. Start a new event instead.")
-    if computed == "CANCELLED":
-        raise HTTPException(status_code=400, detail="Cannot modify a cancelled event. Start a new event instead.")
+    if computed in ("COMPLETED", "CANCELLED"):
+        raise HTTPException(
+            status_code=400,
+            detail="The current event is not modifiable. Start a new event instead.",
+        )
 
     update = {}
-    if body.event_start_time is not None:
-        try:
-            update["event_start_time"] = datetime.fromisoformat(body.event_start_time.replace("Z", "+00:00")).replace(tzinfo=None)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid start time format")
+    new_start = event.get("event_start_time")
+    new_end = event.get("event_end_time")
+
     if body.event_end_time is not None:
         try:
-            update["event_end_time"] = datetime.fromisoformat(body.event_end_time.replace("Z", "+00:00")).replace(tzinfo=None)
+            new_end = datetime.fromisoformat(body.event_end_time.replace("Z", "+00:00")).replace(tzinfo=None)
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid end time format")
-    if body.event_duration_minutes is not None:
-        if body.event_duration_minutes < 5 or body.event_duration_minutes > 1440:
-            raise HTTPException(status_code=400, detail="Duration must be between 5 and 1440 minutes")
-        update["event_duration_minutes"] = body.event_duration_minutes
-    if body.event_name is not None:
-        if body.event_name.strip():
-            update["event_name"] = body.event_name.strip()
+        update["event_end_time"] = new_end
+
+    if body.event_start_time is not None:
+        if computed == "ONGOING":
+            raise HTTPException(status_code=400, detail="Start time cannot be changed while the event is ongoing.")
+        try:
+            new_start = datetime.fromisoformat(body.event_start_time.replace("Z", "+00:00")).replace(tzinfo=None)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid start time format")
+        update["event_start_time"] = new_start
+
     if body.leaderboard_enabled is not None:
         update["leaderboard_enabled"] = body.leaderboard_enabled
 
     if not update:
         raise HTTPException(status_code=400, detail="No settings provided")
 
-    if "event_start_time" in update or "event_end_time" in update:
-        existing_start = event.get("event_start_time")
-        existing_end = event.get("event_end_time")
-        if isinstance(existing_start, str):
-            existing_start = datetime.fromisoformat(existing_start.replace("Z", "+00:00")).replace(tzinfo=None)
-        if isinstance(existing_end, str):
-            existing_end = datetime.fromisoformat(existing_end.replace("Z", "+00:00")).replace(tzinfo=None)
-        s = update.get("event_start_time", existing_start)
-        e = update.get("event_end_time", existing_end)
-        if s and e:
-            if e <= s:
-                raise HTTPException(status_code=400, detail="End time must be after start time")
+    if new_start is not None and new_end is not None and (new_start >= new_end):
+        raise HTTPException(status_code=400, detail="End time must be after start time")
 
     update["updated_at"] = datetime.utcnow()
     await db.events.update_one({"event_id": event["event_id"]}, {"$set": update})
 
+    duration_minutes = _calculated_duration_minutes({**event, **update})
+
     await db.audit_logs.insert_one({
         "action": "event_settings_updated",
         "actor": admin.get("sub", "admin"),
-        "details": f"Updated: {list(update.keys())}",
+        "details": f"Updated {list(update.keys())} on event {event.get('event_code')}",
         "timestamp": datetime.utcnow()
     })
 
-    return {"message": "Event configuration updated"}
+    return {
+        "message": "Event configuration updated",
+        "event_code": event.get("event_code"),
+        "calculated_duration_minutes": duration_minutes,
+        "status": compute_event_status({**event, **update}),
+    }
 
 
 @router.get("/event/history")
@@ -1069,6 +1011,8 @@ async def get_event_history(admin=Depends(get_admin_user)):
         history.append(h)
     from app.events import get_current_event as _get_current
     current = await _get_current()
+    if current:
+        current["_id"] = str(current["_id"])
     return {"history": history, "current_event": current}
 
 
@@ -1117,30 +1061,59 @@ async def generate_allocation(admin=Depends(get_admin_user)):
     if not challenges:
         raise HTTPException(status_code=400, detail="No challenges imported")
 
-    await db.allocations.delete_many({"event_id": event_id} if event_id else {})
+    # Remove every prior allocation for the teams being (re)allocated.
+    # Delete by team_code (not by event_id) so this is fully idempotent and also
+    # clears legacy allocations that carry no event_id. The DB (not the browser)
+    # is the source of truth and re-running always produces a fresh allocation.
+    team_codes = [t["team_code"] for t in teams]
+    previous = []
+    async for alloc in db.allocations.find({"team_code": {"$in": team_codes}}):
+        previous.append(alloc)
+    await db.allocations.delete_many({"team_code": {"$in": team_codes}})
+
+    # DB-first: purge every workspace bucket these teams had so a re-allocation
+    # never serves stale files from an earlier challenge allocation.
+    from app.storage import delete_workspace_from_db
+    for alloc in previous:
+        old_challenge = alloc.get("challenge_code")
+        for team_code in team_codes:
+            if old_challenge:
+                await delete_workspace_from_db(team_code, old_challenge)
 
     # Balanced randomized allocation: round-robin over shuffled challenge codes
     # so that no challenge is unfairly over/under-loaded.
     random.shuffle(teams)
     challenge_codes = [ch["challenge_code"] for ch in challenges]
-    random.shuffle(challenge_codes)
-    counts = {cc: 0 for cc in challenge_codes}
-    num_challenges = len(challenge_codes)
-
-    allocations = []
-    for i, team in enumerate(teams):
-        # pick the challenge with the fewest allocations so far (balanced)
-        cc = min(challenge_codes, key=lambda c: counts[c])
-        counts[cc] += 1
-        alloc_doc = {
-            "team_code": team["team_code"],
-            "challenge_code": cc,
-            "released": True,
-            "event_id": event_id,
-            "allocated_at": datetime.utcnow()
-        }
-        await db.allocations.insert_one(alloc_doc)
-        allocations.append(alloc_doc)
+    if len(challenge_codes) < 2:
+        # Single challenge: every team gets it
+        allocations = []
+        for team in teams:
+            alloc_doc = {
+                "team_code": team["team_code"],
+                "challenge_code": challenge_codes[0],
+                "released": True,
+                "event_id": event_id,
+                "allocated_at": datetime.utcnow()
+            }
+            await db.allocations.insert_one(alloc_doc)
+            allocations.append(alloc_doc)
+    else:
+        random.shuffle(challenge_codes)
+        counts = {cc: 0 for cc in challenge_codes}
+        allocations = []
+        for team in teams:
+            # pick the challenge with the fewest allocations so far (balanced)
+            cc = min(challenge_codes, key=lambda c: counts[c])
+            counts[cc] += 1
+            alloc_doc = {
+                "team_code": team["team_code"],
+                "challenge_code": cc,
+                "released": True,
+                "event_id": event_id,
+                "allocated_at": datetime.utcnow()
+            }
+            await db.allocations.insert_one(alloc_doc)
+            allocations.append(alloc_doc)
 
     if event_id:
         await db.events.update_one(
@@ -1314,7 +1287,7 @@ async def get_leaderboard(admin=Depends(get_admin_user)):
     entries = []
     async for sub in db.submissions.find(query).sort("score", -1):
         team = await db.teams.find_one({"team_code": sub["team_code"]})
-        alloc = await db.allocations.find_one({"team_code": sub["team_code"]})
+        alloc = await db.allocations.find_one({"team_code": sub["team_code"], "event_id": sub.get("event_id")})
         entries.append({
             "team_code": sub["team_code"],
             "team_name": team["team_name"] if team else "",
