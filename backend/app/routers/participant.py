@@ -108,13 +108,7 @@ async def participant_dashboard(user=Depends(get_participant_user)):
     event = await get_current_event()
     computed = compute_event_status(event) if event else "NO_EVENT"
 
-    # Allocations are scoped to the current event. No active event (or a
-    # cancelled / completed one) means NO challenge is surfaced, so a stale
-    # allocation from a previous event can never leak into the dashboard.
-    allocation = None
-    active = computed in ("UPCOMING", "ONGOING")
-    if active and event:
-        allocation = await db.allocations.find_one({"team_code": team_code, "event_id": event["event_id"]})
+    challenge_code = team.get("challenge_code")
 
     now = datetime.utcnow()
     remaining_seconds = None
@@ -145,8 +139,8 @@ async def participant_dashboard(user=Depends(get_participant_user)):
         submission.pop("_id", None)
 
     challenge_info = None
-    if allocation and allocation.get("released"):
-        ch = await db.challenges.find_one({"challenge_code": allocation["challenge_code"]})
+    if challenge_code:
+        ch = await db.challenges.find_one({"challenge_code": challenge_code})
         if ch:
             challenge_info = {
                 "challenge_code": ch["challenge_code"],
@@ -168,10 +162,7 @@ async def participant_dashboard(user=Depends(get_participant_user)):
         "countdown_seconds": countdown_seconds,
         "remaining_seconds": remaining_seconds,
         "announcements": announcements,
-        "allocation": {
-            "challenge_code": allocation.get("challenge_code") if allocation else None,
-            "released": allocation.get("released", False) if allocation else False,
-        },
+        "challenge_code": challenge_code,
         "challenge": challenge_info,
         "submission": submission,
         "leaderboard_enabled": (event.get("leaderboard_enabled", False) if event else False) if computed in ("ONGOING", "UPCOMING") else False,
@@ -220,11 +211,10 @@ async def participant_leaderboard(user=Depends(get_participant_user)):
     entries = []
     async for sub in db.submissions.find({"status": "evaluated", "event_id": event_id}).sort("score", -1):
         team = await db.teams.find_one({"team_code": sub["team_code"]})
-        alloc = await db.allocations.find_one({"team_code": sub["team_code"], "event_id": event_id})
         entries.append({
             "team_code": sub["team_code"],
             "team_name": team["team_name"] if team else "",
-            "challenge_code": alloc.get("challenge_code", "") if alloc else "",
+            "challenge_code": (team.get("challenge_code") or "") if team else "",
             "score": sub.get("score", 0),
             "submitted_at": sub.get("submitted_at"),
         })

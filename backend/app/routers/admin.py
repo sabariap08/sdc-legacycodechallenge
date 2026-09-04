@@ -21,7 +21,6 @@ import zipfile
 import io
 import subprocess
 import secrets
-import random
 import re
 import logging
 
@@ -73,6 +72,7 @@ class TeamCreate(BaseModel):
     team_name: str
     participant_count: int
     participants: List[ParticipantCreate]
+    challenge_code: Optional[str] = ""
 
 
 @router.post("/teams")
@@ -122,6 +122,7 @@ async def create_team(body: TeamCreate, admin=Depends(get_admin_user)):
         "team_name": body.team_name.strip(),
         "participant_count": body.participant_count,
         "bin_number": bin_number,
+        "challenge_code": (body.challenge_code or "").strip() or None,
         "status": "REGISTERED",
         "created_at": datetime.utcnow()
     }
@@ -162,6 +163,7 @@ async def create_team(body: TeamCreate, admin=Depends(get_admin_user)):
         "team_name": body.team_name,
         "team_code": team_code,
         "bin_number": bin_number,
+        "challenge_code": team_doc.get("challenge_code"),
         "participant_count": body.participant_count,
         "team_leader": body.participants[0].name,
         "default_password": DEFAULT_PARTICIPANT_PASSWORD
@@ -196,20 +198,13 @@ async def get_team(team_code: str, admin=Depends(get_admin_user)):
         p["_id"] = str(p["_id"])
         p["is_blocked"] = p["email"] in blocked_emails
         participants.append(p)
-    from app.events import get_current_event as _get_cur_ev
-    _cev = await _get_cur_ev()
-    allocation = await db.allocations.find_one(
-        {"team_code": team_code, "event_id": _cev["event_id"]} if _cev else {"team_code": team_code}
-    )
-    if allocation:
-        allocation["_id"] = str(allocation["_id"])
     submission = await db.submissions.find_one({"team_code": team_code}, sort=[("submitted_at", -1)])
     if submission:
         submission["_id"] = str(submission["_id"])
     return {
         "team": team,
         "participants": participants,
-        "allocation": allocation,
+        "challenge_code": team.get("challenge_code"),
         "submission": submission
     }
 
@@ -221,10 +216,13 @@ async def delete_team(team_code: str, admin=Depends(get_admin_user)):
     if not team:
         raise HTTPException(status_code=404, detail="Team not found")
 
+    challenge_code = team.get("challenge_code")
+    if challenge_code:
+        await delete_workspace_from_db(team_code, challenge_code)
+
     await db.teams.delete_one({"team_code": team_code})
     await db.participants.delete_many({"team_code": team_code})
     await db.team_auth.delete_one({"team_code": team_code})
-    await db.allocations.delete_many({"team_code": team_code})
     await db.submissions.delete_many({"team_code": team_code})
     await db.blocked_users.delete_many({"team_code": team_code})
 
@@ -709,13 +707,10 @@ async def delete_challenge(challenge_code: str, admin=Depends(get_admin_user)):
     # 2) Drop evaluator GridFS bucket
     await delete_evaluator_from_db(challenge_code)
 
-    # 3) Drop every team workspace bucket allocated to this challenge
+    # 3) Drop every team workspace for this challenge
     try:
-        async for alloc in db.allocations.find({"challenge_code": challenge_code}):
-            team_code = alloc.get("team_code")
-            if team_code:
-                await delete_workspace_from_db(team_code, challenge_code)
-        await db.allocations.delete_many({"challenge_code": challenge_code})
+        async for t in db.teams.find({"challenge_code": challenge_code}):
+            await delete_workspace_from_db(t["team_code"], challenge_code)
     except Exception as e:
         logger.warning("Failed to clean workspaces for %s: %s", challenge_code, e)
 
@@ -1032,196 +1027,6 @@ async def get_event_countdown(admin=Depends(get_admin_user)):
     }
 
 
-@router.post("/allocation/generate")
-async def generate_allocation(admin=Depends(get_admin_user)):
-    from app.events import get_current_event as _get_current
-    db = get_db()
-
-    event = await _get_current()
-    event_id = event["event_id"] if event else None
-
-    if event and compute_event_status(event) == "ONGOING":
-        raise HTTPException(
-            status_code=403,
-            detail="Challenge allocation is locked because the event is live."
-        )
-
-    teams = []
-    async for team in db.teams.find():
-        if team.get("status") != "BLOCKED":
-            teams.append(team)
-
-    if not teams:
-        raise HTTPException(status_code=400, detail="No eligible teams registered")
-
-    challenges = []
-    async for ch in db.challenges.find({"status": "READY"}):
-        challenges.append(ch)
-
-    if not challenges:
-        raise HTTPException(status_code=400, detail="No challenges imported")
-
-    # Remove every prior allocation for the teams being (re)allocated.
-    # Delete by team_code (not by event_id) so this is fully idempotent and also
-    # clears legacy allocations that carry no event_id. The DB (not the browser)
-    # is the source of truth and re-running always produces a fresh allocation.
-    team_codes = [t["team_code"] for t in teams]
-    previous = []
-    async for alloc in db.allocations.find({"team_code": {"$in": team_codes}}):
-        previous.append(alloc)
-    await db.allocations.delete_many({"team_code": {"$in": team_codes}})
-
-    # DB-first: purge every workspace bucket these teams had so a re-allocation
-    # never serves stale files from an earlier challenge allocation.
-    from app.storage import delete_workspace_from_db
-    for alloc in previous:
-        old_challenge = alloc.get("challenge_code")
-        for team_code in team_codes:
-            if old_challenge:
-                await delete_workspace_from_db(team_code, old_challenge)
-
-    # Balanced randomized allocation: round-robin over shuffled challenge codes
-    # so that no challenge is unfairly over/under-loaded.
-    random.shuffle(teams)
-    challenge_codes = [ch["challenge_code"] for ch in challenges]
-    if len(challenge_codes) < 2:
-        # Single challenge: every team gets it
-        allocations = []
-        for team in teams:
-            alloc_doc = {
-                "team_code": team["team_code"],
-                "challenge_code": challenge_codes[0],
-                "released": True,
-                "event_id": event_id,
-                "allocated_at": datetime.utcnow()
-            }
-            await db.allocations.insert_one(alloc_doc)
-            allocations.append(alloc_doc)
-    else:
-        random.shuffle(challenge_codes)
-        counts = {cc: 0 for cc in challenge_codes}
-        allocations = []
-        for team in teams:
-            # pick the challenge with the fewest allocations so far (balanced)
-            cc = min(challenge_codes, key=lambda c: counts[c])
-            counts[cc] += 1
-            alloc_doc = {
-                "team_code": team["team_code"],
-                "challenge_code": cc,
-                "released": True,
-                "event_id": event_id,
-                "allocated_at": datetime.utcnow()
-            }
-            await db.allocations.insert_one(alloc_doc)
-            allocations.append(alloc_doc)
-
-    if event_id:
-        await db.events.update_one(
-            {"event_id": event_id},
-            {"$set": {"allocation_state": "RELEASED", "updated_at": datetime.utcnow()}}
-        )
-
-    await db.audit_logs.insert_one({
-        "action": "allocation_generated",
-        "actor": admin.get("sub", "admin"),
-        "details": f"Generated and released balanced allocations for {len(teams)} teams across {len(challenges)} challenges",
-        "timestamp": datetime.utcnow()
-    })
-
-    for a in allocations:
-        a["_id"] = str(a.get("_id", ""))
-
-    return {
-        "message": "Allocations generated and released successfully",
-        "allocations": allocations,
-        "count": len(allocations)
-    }
-
-
-@router.post("/allocation/release")
-async def release_allocation(admin=Depends(get_admin_user)):
-    from app.events import get_current_event as _get_current
-    db = get_db()
-
-    event = await _get_current()
-    event_id = event["event_id"] if event else None
-
-    if event and compute_event_status(event) == "ONGOING":
-        raise HTTPException(status_code=403, detail="Cannot release allocations during an ongoing event.")
-
-    result = await db.allocations.update_many(
-        {"event_id": event_id} if event_id else {},
-        {"$set": {"released": True}}
-    )
-    if event_id:
-        await db.events.update_one(
-            {"event_id": event_id},
-            {"$set": {"allocation_state": "RELEASED", "updated_at": datetime.utcnow()}}
-        )
-
-    await db.audit_logs.insert_one({
-        "action": "allocation_released",
-        "actor": admin.get("sub", "admin"),
-        "details": f"Released {result.modified_count} allocations",
-        "timestamp": datetime.utcnow()
-    })
-
-    return {"message": "Allocations released", "count": result.modified_count}
-
-
-@router.post("/allocation/reset")
-async def reset_allocation(admin=Depends(get_admin_user)):
-    from app.events import get_current_event as _get_current
-    db = get_db()
-
-    event = await _get_current()
-    event_id = event["event_id"] if event else None
-
-    if event and compute_event_status(event) == "ONGOING":
-        raise HTTPException(status_code=403, detail="Cannot reset allocations during an ongoing event.")
-
-    await db.allocations.delete_many({"event_id": event_id} if event_id else {})
-    if event_id:
-        await db.events.update_one(
-            {"event_id": event_id},
-            {"$set": {"allocation_state": "PENDING", "updated_at": datetime.utcnow()}}
-        )
-
-    await db.audit_logs.insert_one({
-        "action": "allocation_reset",
-        "actor": admin.get("sub", "admin"),
-        "details": "All allocations have been reset",
-        "timestamp": datetime.utcnow()
-    })
-
-    return {"message": "Allocations reset successfully"}
-
-
-@router.get("/allocation")
-async def get_allocations(admin=Depends(get_admin_user)):
-    from app.events import get_current_event as _get_current
-    db = get_db()
-    event = await _get_current()
-    event_id = event["event_id"] if event else None
-
-    allocations = []
-    query = {"event_id": event_id} if event_id else {}
-    async for alloc in db.allocations.find(query):
-        alloc["_id"] = str(alloc["_id"])
-        allocations.append(alloc)
-
-    alloc_state = (event.get("allocation_state", "PENDING") if event else "PENDING")
-    computed = compute_event_status(event) if event else "DRAFT"
-
-    return {
-        "allocations": allocations,
-        "allocation_state": alloc_state,
-        "event_status": computed,
-        "event_code": event.get("event_code") if event else None,
-        "count": len(allocations)
-    }
-
-
 # ─────────────────────────────────────────────
 # ANNOUNCEMENTS
 # ─────────────────────────────────────────────
@@ -1287,11 +1092,10 @@ async def get_leaderboard(admin=Depends(get_admin_user)):
     entries = []
     async for sub in db.submissions.find(query).sort("score", -1):
         team = await db.teams.find_one({"team_code": sub["team_code"]})
-        alloc = await db.allocations.find_one({"team_code": sub["team_code"], "event_id": sub.get("event_id")})
         entries.append({
             "team_code": sub["team_code"],
             "team_name": team["team_name"] if team else "",
-            "challenge_code": alloc.get("challenge_code", "") if alloc else "",
+            "challenge_code": (team.get("challenge_code") or "") if team else "",
             "score": sub.get("score", 0),
             "submitted_at": sub.get("submitted_at"),
             "status": sub.get("status", "")
@@ -1342,11 +1146,10 @@ async def get_dashboard(admin=Depends(get_admin_user)):
     event = await _get_current()
     event_id = event["event_id"] if event else None
     event_status = compute_event_status(event) if event else "DRAFT"
-    alloc_query = {"event_id": event_id} if event_id else {}
 
     challenge_distribution = []
     async for ch in db.challenges.find():
-        alloc_count = await db.allocations.count_documents({"challenge_code": ch["challenge_code"], **alloc_query})
+        alloc_count = await db.teams.count_documents({"challenge_code": ch["challenge_code"]})
         challenge_distribution.append({
             "challenge_code": ch["challenge_code"],
             "challenge_name": ch.get("challenge_name", ch.get("name", ch.get("title", ch["challenge_code"]))),
@@ -1354,14 +1157,11 @@ async def get_dashboard(admin=Depends(get_admin_user)):
             "allocated_teams": alloc_count
         })
 
-    allocated_teams = await db.allocations.count_documents(alloc_query)
-    released_allocations = await db.allocations.count_documents({**alloc_query, "released": True})
+    allocated_teams = await db.teams.count_documents({"challenge_code": {"$ne": None, "$ne": ""}})
 
     sub_query = {"event_id": event_id} if event_id else {}
     total_submissions = await db.submissions.count_documents(sub_query)
     evaluated_submissions = await db.submissions.count_documents({**sub_query, "status": "evaluated"})
-
-    alloc_state = (event.get("allocation_state", "PENDING") if event else "PENDING")
 
     return {
         "total_teams": total_teams,
@@ -1376,6 +1176,4 @@ async def get_dashboard(admin=Depends(get_admin_user)):
         "total_submissions": total_submissions,
         "evaluated_submissions": evaluated_submissions,
         "allocated_teams": allocated_teams,
-        "released_allocations": released_allocations,
-        "allocation_state": alloc_state,
     }

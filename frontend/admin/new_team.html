@@ -28,6 +28,9 @@
                 <div id="step1">
                     <h3 style="margin-bottom:16px;">Team Information</h3>
                     <div class="form-group"><label>Team Name</label><input type="text" id="teamName" placeholder="Enter a unique team name" required></div>
+                    <div class="form-group"><label>Assign Challenge</label>
+                        <select id="challengeCode"><option value="">No challenge (assign later)</option></select>
+                    </div>
                     <div class="form-group"><label>Number of Participants</label>
                         <select id="participantCount" required><option value="">Select count</option><option value="1">1 Member</option><option value="2">2 Members</option><option value="3">3 Members</option><option value="4">4 Members</option></select>
                     </div>
@@ -51,6 +54,20 @@
                 </div>
             </div>
         `;
+        (async function loadChallenges() {
+            try {
+                const resp = await API.get('/api/admin/challenges');
+                if (!resp) return;
+                const data = await resp.json();
+                const sel = document.getElementById('challengeCode');
+                for (const ch of (data.challenges || [])) {
+                    const opt = document.createElement('option');
+                    opt.value = ch.challenge_code;
+                    opt.textContent = ch.challenge_code + ' — ' + (ch.challenge_name || ch.name || ch.title || '');
+                    sel.appendChild(opt);
+                }
+            } catch (e) {}
+        })();
         function goToStep1() {
             hideError('error-msg'); hideSuccess('success-msg');
             document.getElementById('step1').style.display = '';
@@ -104,6 +121,7 @@
             let html = `<div style="padding:12px; background:var(--bg-input); border:1px solid var(--border); border-radius:var(--radius); margin-bottom:12px;">
                 <p><strong>Team Name:</strong> ${escapeHtml(document.getElementById('teamName').value.trim())}</p>
                 <p><strong>Members:</strong> ${count}</p>
+                ${document.getElementById('challengeCode').value ? '<p><strong>Challenge:</strong> <span class="badge badge-info">' + escapeHtml(document.getElementById('challengeCode').value) + '</span></p>' : ''}
             </div>`;
             for (let i = 0; i < count; i++) {
                 const nm = document.querySelector(`[name="p${i}_name"]`).value.trim();
@@ -141,7 +159,7 @@
                 });
             }
             try {
-                const resp = await API.post('/api/admin/teams', { team_name: document.getElementById('teamName').value.trim(), participant_count: count, participants });
+                const resp = await API.post('/api/admin/teams', { team_name: document.getElementById('teamName').value.trim(), participant_count: count, participants, challenge_code: document.getElementById('challengeCode').value || '' });
                 const data = await resp.json();
                 if (resp.ok) {
                     showSuccess('success-msg', `

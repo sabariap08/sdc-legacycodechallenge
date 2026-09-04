@@ -106,48 +106,14 @@ def get_db():
     return db
 
 
-async def _drop_legacy_allocation_indexes():
-    """Remove stale legacy unique indexes on the allocations collection.
-
-    Older deployments created a single-field ``team_code`` unique index. It
-    conflicts with the current compound ``(team_code, event_id)`` unique index
-    and causes DuplicateKeyError 500s during allocation generation. Keep only
-    the intended indexes.
-    """
-    try:
-        indexes = await db.allocations.list_indexes().to_list(length=None)
-    except Exception as e:
-        logger.warning("Could not list allocations indexes: %s", e)
-        return
-    for idx in indexes:
-        name = idx.get("name", "")
-        keys = idx.get("key", {})
-        is_unique = idx.get("unique", False)
-        if not is_unique:
-            continue
-        field_names = list(keys.keys())
-        # Drop any legacy single-field unique index on team_code (or challenge_code)
-        if len(field_names) == 1 and field_names[0] in ("team_code", "challenge_code"):
-            if name not in ("team_code_1_event_id_1", "_id_"):
-                try:
-                    await db.allocations.drop_index(name)
-                    logger.info("Dropped legacy unique index %s on allocations", name)
-                except Exception as e:
-                    logger.warning("Could not drop legacy index %s on allocations: %s", name, e)
-
-
 async def _create_indexes():
-    await _drop_legacy_allocation_indexes()
     await db.teams.create_index("team_code", unique=True)
     await db.teams.create_index("team_name", unique=True)
     await db.teams.create_index("bin_number", unique=True)
     await db.participants.create_index("email", unique=True)
     await db.participants.create_index("team_code")
     await db.challenges.create_index("challenge_code", unique=True)
-    # unique: a team may only be allocated to one challenge per event
-    await db.allocations.create_index(["team_code", "event_id"], unique=True)
-    await db.allocations.create_index("event_id")
-    await db.allocations.create_index("challenge_code")
+    await db.teams.create_index("challenge_code")
     await db.submissions.create_index("team_code")
     await db.submissions.create_index("challenge_code")
     await db.submissions.create_index("event_id")
@@ -155,11 +121,9 @@ async def _create_indexes():
     await db.audit_logs.create_index("timestamp")
     await db.announcements.create_index("created_at")
     await db.blocked_users.create_index("email", unique=True)
-    # New: events collection is the source of truth for event lifecycle
     await db.events.create_index("event_code", unique=True)
     await db.events.create_index("status")
     await db.events.create_index("created_datetime")
-    # Compatibility accessor kept for any legacy reads
     await db.event_settings.create_index("event_code", sparse=True)
     await db.event_history.create_index("archived_at")
     await db.event_history.create_index("event_code", sparse=True)

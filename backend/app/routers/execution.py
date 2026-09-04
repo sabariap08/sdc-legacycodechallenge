@@ -19,11 +19,11 @@ router = APIRouter(prefix="/api/execution", tags=["execution"])
 MAX_OUTPUT = 50000
 
 
-async def _get_current_allocation(db, team_code: str):
-    event = await get_current_event()
-    if not event:
+async def _get_team_challenge_code(db, team_code: str):
+    team = await db.teams.find_one({"team_code": team_code})
+    if not team:
         return None
-    return await db.allocations.find_one({"team_code": team_code, "event_id": event["event_id"]})
+    return team.get("challenge_code")
 RUN_TIMEOUT = 30
 TEST_TIMEOUT = 60
 MAX_FILE_SIZE = 1024 * 1024
@@ -311,11 +311,10 @@ class RunRequest(BaseModel):
 async def run_code(body: RunRequest, user=Depends(get_participant_user)):
     db = get_db()
     team_code = user.get("sub")
-    alloc = await _get_current_allocation(db, team_code)
-    if not alloc or not alloc.get("released"):
-        raise HTTPException(status_code=403, detail="Challenge not yet released")
+    challenge_code = await _get_team_challenge_code(db, team_code)
+    if not challenge_code:
+        raise HTTPException(status_code=403, detail="No challenge assigned to your team")
 
-    challenge_code = alloc["challenge_code"]
     workspace = await _hydrate_workspace(team_code, challenge_code)
     try:
         run_file = body.file_path
@@ -377,11 +376,10 @@ class TestRequest(BaseModel):
 async def test_code(body: TestRequest, user=Depends(get_participant_user)):
     db = get_db()
     team_code = user.get("sub")
-    alloc = await _get_current_allocation(db, team_code)
-    if not alloc or not alloc.get("released"):
-        raise HTTPException(status_code=403, detail="Challenge not yet released")
+    challenge_code = await _get_team_challenge_code(db, team_code)
+    if not challenge_code:
+        raise HTTPException(status_code=403, detail="No challenge assigned to your team")
 
-    challenge_code = alloc["challenge_code"]
     workspace = await _hydrate_workspace(team_code, challenge_code)
     try:
         has_eval, eval_files = await has_evaluator(challenge_code)

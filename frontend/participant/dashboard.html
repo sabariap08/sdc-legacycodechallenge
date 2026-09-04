@@ -413,10 +413,10 @@
             document.getElementById('memberCountDetail').textContent = (data.participants || []).length;
 
             const memberCount = (data.participants || []).length;
-            const hasAlloc = data.allocation && data.allocation.released && data.allocation.challenge_code;
+            const hasChallenge = !!data.challenge_code;
             document.getElementById('statRow').innerHTML = `
                 <div class="stat-pill" style="animation-delay:.05s;"><div class="stat-val">${memberCount}</div><div class="stat-lbl">Members</div></div>
-                <div class="stat-pill" style="animation-delay:.1s;"><div class="stat-val">${hasAlloc ? '1' : '0'}</div><div class="stat-lbl">Challenge</div></div>
+                <div class="stat-pill" style="animation-delay:.1s;"><div class="stat-val">${hasChallenge ? '1' : '0'}</div><div class="stat-lbl">Challenge</div></div>
                 <div class="stat-pill" style="animation-delay:.15s;"><div class="stat-val">${data.submission ? '1' : '0'}</div><div class="stat-lbl">Submissions</div></div>`;
 
             const cs = document.getElementById('countdownSection');
@@ -451,10 +451,10 @@
             }
             document.getElementById('teamInfo').innerHTML = membersHtml || '<p class="text-muted" style="font-size:13px;">No participants</p>';
 
-            const alloc = data.allocation;
-            if (alloc && alloc.released && alloc.challenge_code) {
+            const challengeCode = data.challenge_code;
+            if (challengeCode) {
                 const ch = data.challenge || {};
-                const challengeName = ch.challenge_name || ch.language || alloc.challenge_code;
+                const challengeName = ch.challenge_name || ch.language || challengeCode;
                 const difficulty = ch.difficulty || '';
                 const language = ch.language || '';
                 const diffColors = { 'easy': '#22c55e', 'medium': '#f59e0b', 'hard': '#ef4444' };
@@ -464,7 +464,7 @@
                         <div style="font-size:13px; color:var(--text-muted); text-transform:uppercase; letter-spacing:1px; margin-bottom:8px;">Your Assigned Challenge</div>
                         <div class="challenge-code">${escapeHtml(challengeName)}</div>
                         <div style="margin:12px 0 20px; display:flex; gap:10px; justify-content:center; flex-wrap:wrap;">
-                            <span style="font-size:12px; padding:4px 12px; border-radius:var(--radius-full); background:rgba(6,182,212,.1); color:var(--secondary); border:1px solid rgba(6,182,212,.2); font-family:var(--font-mono);">${escapeHtml(alloc.challenge_code)}</span>
+                            <span style="font-size:12px; padding:4px 12px; border-radius:var(--radius-full); background:rgba(6,182,212,.1); color:var(--secondary); border:1px solid rgba(6,182,212,.2); font-family:var(--font-mono);">${escapeHtml(challengeCode)}</span>
                             ${language ? '<span style="font-size:12px; padding:4px 12px; border-radius:var(--radius-full); background:rgba(99,102,241,.1); color:var(--primary); border:1px solid rgba(99,102,241,.2);">' + escapeHtml(language) + '</span>' : ''}
                             ${difficulty ? '<span style="font-size:12px; padding:4px 12px; border-radius:var(--radius-full); background:rgba(255,255,255,.05); color:' + diffColor + '; border:1px solid ' + diffColor + '30; text-transform:uppercase; font-weight:600;">' + escapeHtml(difficulty) + '</span>' : ''}
                         </div>
@@ -495,15 +495,7 @@
                     }
                 }
             } else {
-                let reason = 'Wait for the organizer to release allocations.';
-                if (!alloc) {
-                    reason = 'No challenge has been allocated to your team yet. The organizer has not assigned a challenge.';
-                } else if (!alloc.released) {
-                    reason = 'Your challenge allocation is pending release by the organizer.';
-                } else if (!alloc.challenge_code) {
-                    reason = 'Your allocation is missing a challenge. Contact the organizer.';
-                }
-                document.getElementById('challengeInfo').innerHTML = '<p style="color:var(--text-muted); font-size:15px;">Challenge not yet released</p><p style="color:var(--text-muted); font-size:13px; margin-top:4px;">' + reason + '</p>';
+                document.getElementById('challengeInfo').innerHTML = '<p style="color:var(--text-muted); font-size:15px;">No challenge assigned</p><p style="color:var(--text-muted); font-size:13px; margin-top:4px;">No challenge has been assigned to your team yet. The organizer will assign one.</p>';
             }
 
             if (data.submission) {

@@ -21,15 +21,9 @@
                 </div>
             </div>
             <div class="stats-grid" id="statsGrid"></div>
-            <div class="grid-2 mb-3">
-                <div class="card">
-                    <div class="card-header"><h3>Challenge Distribution</h3></div>
-                    <div id="challengeDistribution"><div class="flex-center" style="padding:24px;"><span class="loading-spinner"></span></div></div>
-                </div>
-                <div class="card">
-                    <div class="card-header"><h3>Allocation Status</h3></div>
-                    <div id="allocationStatus"><div class="flex-center" style="padding:24px;"><span class="loading-spinner"></span></div></div>
-                </div>
+            <div class="card">
+                <div class="card-header"><h3>Challenge Distribution</h3></div>
+                <div id="challengeDistribution"><div class="flex-center" style="padding:24px;"><span class="loading-spinner"></span></div></div>
             </div>
         `;
         async function loadDashboard() {
@@ -53,27 +47,6 @@
                 distHtml += '</tbody></table></div>';
                 if (data.challenge_distribution.length === 0) distHtml = '<div class="empty-state"><div class="empty-icon">' + ICONS.inbox + '</div><h3>No challenges imported</h3><p>Import repositories from the Repositories page</p></div>';
                 document.getElementById('challengeDistribution').innerHTML = distHtml;
-
-                const stateLabels = { PENDING: 'Pending', GENERATED: 'Generated', RELEASED: 'Released' };
-                const stateColors = { PENDING: 'var(--text-muted)', GENERATED: 'var(--warning)', RELEASED: 'var(--success)' };
-                const allocState = data.allocation_state || 'PENDING';
-                let allocHtml = `
-                    <div style="text-align:center;padding:16px 0;">
-                        <div style="font-size:28px;font-weight:800;font-family:var(--font-mono);color:${stateColors[allocState] || 'var(--text-muted)'};">${stateLabels[allocState] || allocState}</div>
-                        <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">Allocation State</div>
-                    </div>
-                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;">
-                        <div style="text-align:center;padding:12px;background:var(--bg-input);border-radius:var(--radius);border:1px solid var(--border);">
-                            <div style="font-size:20px;font-weight:700;color:var(--primary);">${data.allocated_teams}</div>
-                            <div style="font-size:11px;color:var(--text-muted);">Allocated Teams</div>
-                        </div>
-                        <div style="text-align:center;padding:12px;background:var(--bg-input);border-radius:var(--radius);border:1px solid var(--border);">
-                            <div style="font-size:20px;font-weight:700;color:var(--success);">${data.released_allocations}</div>
-                            <div style="font-size:11px;color:var(--text-muted);">Released</div>
-                        </div>
-                    </div>
-                `;
-                document.getElementById('allocationStatus').innerHTML = allocHtml;
             } catch (err) { console.error('Dashboard load error:', err); }
         }
         loadDashboard();

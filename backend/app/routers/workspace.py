@@ -15,18 +15,10 @@ from app.storage import (
     has_evaluator,
 )
 from datetime import datetime
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/workspace", tags=["workspace"])
-
-
-async def _get_current_allocation(db, team_code: str):
-    event = await get_current_event()
-    if not event:
-        return None
-    return await db.allocations.find_one({"team_code": team_code, "event_id": event["event_id"]})
 
 
 BINARY_EXTENSIONS = {
@@ -39,8 +31,14 @@ BINARY_EXTENSIONS = {
 }
 
 
+async def _get_team_challenge_code(db, team_code: str):
+    team = await db.teams.find_one({"team_code": team_code})
+    if not team:
+        return None
+    return team.get("challenge_code")
+
+
 async def _ensure_workspace(team_code: str, challenge_code: str):
-    """DB-first: if the team has no workspace files yet, seed from the challenge repo."""
     if not is_db_available():
         return False
     has_files = await exists_workspace(team_code, challenge_code)
@@ -59,11 +57,10 @@ def _is_binary_path(path: str) -> bool:
 async def get_file_tree(user=Depends(get_participant_user)):
     db = get_db()
     team_code = user.get("sub")
-    alloc = await _get_current_allocation(db, team_code)
-    if not alloc or not alloc.get("released"):
-        raise HTTPException(status_code=403, detail="Challenge not yet released")
+    challenge_code = await _get_team_challenge_code(db, team_code)
+    if not challenge_code:
+        raise HTTPException(status_code=403, detail="No challenge assigned to your team")
 
-    challenge_code = alloc["challenge_code"]
     await _ensure_workspace(team_code, challenge_code)
     tree = await get_workspace_tree_from_db(team_code, challenge_code)
 
@@ -91,11 +88,10 @@ async def get_file_tree(user=Depends(get_participant_user)):
 async def get_file(path: str, user=Depends(get_participant_user)):
     db = get_db()
     team_code = user.get("sub")
-    alloc = await _get_current_allocation(db, team_code)
-    if not alloc or not alloc.get("released"):
-        raise HTTPException(status_code=403, detail="Challenge not yet released")
+    challenge_code = await _get_team_challenge_code(db, team_code)
+    if not challenge_code:
+        raise HTTPException(status_code=403, detail="No challenge assigned to your team")
 
-    challenge_code = alloc["challenge_code"]
     if not sanitize_path(path):
         raise HTTPException(status_code=400, detail="Invalid file path")
 
@@ -147,11 +143,10 @@ async def save_file(body: SaveFileRequest, user=Depends(get_participant_user)):
     if cmps == "COMPLETED":
         raise HTTPException(status_code=403, detail="Event has ended. No more edits allowed.")
 
-    alloc = await _get_current_allocation(db, team_code)
-    if not alloc or not alloc.get("released"):
-        raise HTTPException(status_code=403, detail="Challenge not yet released")
+    challenge_code = await _get_team_challenge_code(db, team_code)
+    if not challenge_code:
+        raise HTTPException(status_code=403, detail="No challenge assigned to your team")
 
-    challenge_code = alloc["challenge_code"]
     if not sanitize_path(body.path):
         raise HTTPException(status_code=400, detail="Invalid file path")
 
@@ -191,11 +186,10 @@ async def bulk_save_files(body: BulkSaveRequest, user=Depends(get_participant_us
     if cmps == "COMPLETED":
         raise HTTPException(status_code=403, detail="Event has ended. No more edits allowed.")
 
-    alloc = await _get_current_allocation(db, team_code)
-    if not alloc or not alloc.get("released"):
-        raise HTTPException(status_code=403, detail="Challenge not yet released")
+    challenge_code = await _get_team_challenge_code(db, team_code)
+    if not challenge_code:
+        raise HTTPException(status_code=403, detail="No challenge assigned to your team")
 
-    challenge_code = alloc["challenge_code"]
     await _ensure_workspace(team_code, challenge_code)
     saved = []
 
@@ -226,11 +220,10 @@ async def bulk_save_files(body: BulkSaveRequest, user=Depends(get_participant_us
 async def get_code_details(user=Depends(get_participant_user)):
     db = get_db()
     team_code = user.get("sub")
-    alloc = await _get_current_allocation(db, team_code)
-    if not alloc or not alloc.get("released"):
-        raise HTTPException(status_code=403, detail="Challenge not yet released")
+    challenge_code = await _get_team_challenge_code(db, team_code)
+    if not challenge_code:
+        raise HTTPException(status_code=403, detail="No challenge assigned to your team")
 
-    challenge_code = alloc["challenge_code"]
     team = await db.teams.find_one({"team_code": team_code})
     ch = await db.challenges.find_one({"challenge_code": challenge_code})
 

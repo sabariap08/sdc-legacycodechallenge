@@ -35,11 +35,10 @@ async def submit_final(user=Depends(get_participant_user)):
     if computed not in ("ONGOING", "COMPLETED"):
         raise HTTPException(status_code=403, detail="Event has not started yet")
 
-    alloc = await db.allocations.find_one({"team_code": team_code, "event_id": event_id}) if event_id else None
-    if not alloc or not alloc.get("released"):
-        raise HTTPException(status_code=403, detail="Challenge not yet released")
-
-    challenge_code = alloc["challenge_code"]
+    team = await db.teams.find_one({"team_code": team_code})
+    challenge_code = team.get("challenge_code") if team else None
+    if not challenge_code:
+        raise HTTPException(status_code=403, detail="No challenge assigned to your team")
 
     existing = await db.submissions.find_one(
         {"team_code": team_code, "challenge_code": challenge_code, "event_id": event_id},
@@ -95,11 +94,10 @@ async def auto_submit(user=Depends(get_participant_user)):
     event = await get_current_event()
     event_id = event["event_id"] if event else None
 
-    alloc = await db.allocations.find_one({"team_code": team_code, "event_id": event_id}) if event_id else None
-    if not alloc or not alloc.get("released"):
-        return {"message": "No allocation to auto-submit"}
-
-    challenge_code = alloc["challenge_code"]
+    team = await db.teams.find_one({"team_code": team_code})
+    challenge_code = team.get("challenge_code") if team else None
+    if not challenge_code:
+        return {"message": "No challenge assigned to auto-submit"}
 
     existing = await db.submissions.find_one(
         {"team_code": team_code, "challenge_code": challenge_code, "event_id": event_id},

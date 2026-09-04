@@ -23,10 +23,8 @@
                 </div>
                 <div style="display:flex;gap:8px;flex-wrap:wrap;">
                     <button class="btn btn-primary" onclick="showCreateWizard()">${ICONS.add} New Team</button>
-                    <button class="btn btn-secondary" onclick="showRandomAlloc()" id="allocBtn">${ICONS.randomize} Random Allocation</button>
                 </div>
             </div>
-            <div id="allocNotice" class="info-message mb-2" style="display:none;"></div>
             <div class="card">
                 <div id="error-msg" class="error-message"></div>
                 <div id="success-msg" class="success-message"></div>
@@ -34,16 +32,6 @@
             </div>
             <div id="teamDetail" style="display:none;"></div>
             <div id="wizardWrap" style="display:none;"></div>
-            <div id="allocModal" class="modal-overlay" onclick="closeAllocModal()">
-                <div class="modal" onclick="event.stopPropagation()">
-                    <div class="modal-header"><h3 id="allocModalTitle">Confirm</h3><button class="modal-close" onclick="closeAllocModal()">&times;</button></div>
-                    <div class="modal-body"><p id="allocModalBody">Are you sure?</p></div>
-                    <div class="modal-footer">
-                        <button class="btn btn-secondary" onclick="closeAllocModal()">Cancel</button>
-                        <button class="btn btn-danger" id="allocModalConfirm">Confirm</button>
-                    </div>
-                </div>
-            </div>
         `;
 
         function showAllocModal(title, body, onConfirm) {
@@ -54,65 +42,6 @@
         }
         function closeAllocModal() { document.getElementById('allocModal').classList.remove('active'); }
 
-        async function showRandomAlloc() {
-            let eventStatus = 'UPCOMING';
-            try {
-                const statusResp = await API.get('/api/admin/event/status');
-                if (statusResp) {
-                    const sd = await statusResp.json();
-                    eventStatus = sd.computed_status || 'UPCOMING';
-                }
-            } catch(e) {}
-
-            if (eventStatus === 'ONGOING') {
-                showError('error-msg', 'Challenge allocation is locked because the event is live.');
-                return;
-            }
-
-            const allocResp = await API.get('/api/admin/allocation');
-            let hasExisting = false;
-            if (allocResp) {
-                const ad = await allocResp.json();
-                hasExisting = ad.allocations && ad.allocations.length > 0;
-            }
-
-            if (hasExisting) {
-                showAllocModal('Reallocate Challenges?', 'Existing challenge assignments will be replaced with a new balanced random allocation.', doAllocation);
-            } else {
-                doAllocation();
-            }
-        }
-
-        async function doAllocation() {
-            const btn = document.getElementById('allocBtn');
-            btn.disabled = true;
-            btn.innerHTML = '<span class="loading-spinner"></span> Allocating...';
-            hideError('error-msg');
-            hideSuccess('success-msg');
-            try {
-                const genResp = await API.post('/api/admin/allocation/generate', {});
-                if (!genResp) {
-                    showError('error-msg', 'Connection error');
-                    btn.disabled = false;
-                    btn.innerHTML = ICONS.randomize + ' Random Allocation';
-                    return;
-                }
-                const genData = await genResp.json();
-                if (!genResp.ok) {
-                    showError('error-msg', genData.detail || 'Allocation failed');
-                    btn.disabled = false;
-                    btn.innerHTML = ICONS.randomize + ' Random Allocation';
-                    return;
-                }
-                showSuccess('success-msg', 'Challenges reallocated successfully. ' + genData.count + ' teams assigned and released to participants.');
-                loadTeams();
-            } catch(e) {
-                showError('error-msg', 'Connection error during allocation');
-            }
-            btn.disabled = false;
-            btn.innerHTML = ICONS.randomize + ' Random Allocation';
-        }
-
         async function loadTeams() {
             document.getElementById('teamDetail').style.display = 'none';
             document.getElementById('wizardWrap').style.display = 'none';
@@ -120,19 +49,6 @@
             if (pageHeader) pageHeader.style.display = '';
             const card = document.querySelector('.page-content > .card');
             if (card) card.style.display = '';
-
-            try {
-                const statusResp = await API.get('/api/admin/event/status');
-                if (statusResp) {
-                    const sd = await statusResp.json();
-                    const cs = sd.computed_status;
-                    if (cs === 'ONGOING') {
-                        document.getElementById('allocBtn').disabled = true;
-                    } else {
-                        document.getElementById('allocBtn').disabled = false;
-                    }
-                }
-            } catch(e) {}
 
             const teamsResp = await API.get('/api/admin/teams');
             if (!teamsResp) return;
@@ -142,16 +58,9 @@
                 return;
             }
 
-            let allocMap = {};
-            const aResp = await API.get('/api/admin/allocation');
-            if (aResp) {
-                const ad = await aResp.json();
-                for (const a of ad.allocations) { allocMap[a.team_code] = a.challenge_code; }
-            }
-
             let html = '<div class="table-container"><table><thead><tr><th>Team Code</th><th>Team Name</th><th>Members</th><th>Challenge</th><th>Status</th><th>Actions</th></tr></thead><tbody>';
             for (const t of tData.teams) {
-                const challCode = allocMap[t.team_code] || null;
+                const challCode = t.challenge_code || null;
                 const blocked = t.status === 'BLOCKED';
                 html += '<tr style="' + (blocked ? 'opacity:.6;' : '') + '">';
                 html += '<td><strong class="font-mono">' + escapeHtml(t.team_code) + '</strong></td>';
@@ -195,12 +104,11 @@
                 participantsHtml += '</div></div>';
             }
 
-            let allocHtml = '<p class="text-muted" style="font-size:13px;">Not allocated</p>';
-            if (data.allocation) {
-                allocHtml = '<div style="padding:12px;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius);">';
-                allocHtml += '<p><strong>Challenge:</strong> <span class="badge badge-info">' + escapeHtml(data.allocation.challenge_code) + '</span></p>';
-                allocHtml += '<p><strong>Released:</strong> ' + (data.allocation.released ? '<span class="badge badge-success">Yes</span>' : '<span class="badge badge-warning">No</span>') + '</p>';
-                allocHtml += '</div>';
+            let challengeHtml = '<p class="text-muted" style="font-size:13px;">No challenge assigned</p>';
+            if (data.challenge_code) {
+                challengeHtml = '<div style="padding:12px;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius);">';
+                challengeHtml += '<p><strong>Challenge:</strong> <span class="badge badge-info">' + escapeHtml(data.challenge_code) + '</span></p>';
+                challengeHtml += '</div>';
             }
 
             let submissionHtml = '<p class="text-muted" style="font-size:13px;">No submissions yet</p>';
@@ -232,7 +140,7 @@
                 <div class="grid-2 mb-3">
                     <div class="card"><div class="card-header"><h3>Participants</h3></div>${participantsHtml}</div>
                     <div>
-                        <div class="card"><div class="card-header"><h3>Allocation</h3></div>${allocHtml}</div>
+                        <div class="card"><div class="card-header"><h3>Challenge</h3></div>${challengeHtml}</div>
                         <div class="card"><div class="card-header"><h3>Submission</h3></div>${submissionHtml}</div>
                     </div>
                 </div>`;
@@ -271,7 +179,7 @@
         }
 
         async function deleteTeam(code, name) {
-            showAllocModal('Delete Team', 'Delete team "' + name + '" (' + code + ')? This will remove all participants, allocations, and submissions permanently.', async () => {
+            showAllocModal('Delete Team', 'Delete team "' + name + '" (' + code + ')? This will remove all participants and submissions permanently.', async () => {
                 const resp = await API.del('/api/admin/teams/' + code);
                 if (resp && resp.ok) { loadTeams(); }
                 else { const d = resp ? await resp.json() : {}; showError('error-msg', d.detail || 'Failed to delete team'); }
@@ -299,6 +207,9 @@
                     </div>
                     <div id="wizStep1">
                         <div class="form-group"><label>Team Name</label><input type="text" id="wTeamName" placeholder="Enter a unique team name"></div>
+                        <div class="form-group"><label>Assign Challenge</label>
+                            <select id="wChallenge"><option value="">No challenge (assign later)</option></select>
+                        </div>
                         <div class="form-group"><label>Number of Participants</label>
                             <select id="wPartCount"><option value="">Select count</option><option value="1">1 Member</option><option value="2">2 Members</option><option value="3">3 Members</option><option value="4">4 Members</option></select>
                         </div>
@@ -319,6 +230,22 @@
                         </div>
                     </div>
                 </div>`;
+            loadWizardChallenges();
+        }
+
+        async function loadWizardChallenges() {
+            try {
+                const resp = await API.get('/api/admin/challenges');
+                if (!resp) return;
+                const data = await resp.json();
+                const sel = document.getElementById('wChallenge');
+                for (const ch of (data.challenges || [])) {
+                    const opt = document.createElement('option');
+                    opt.value = ch.challenge_code;
+                    opt.textContent = ch.challenge_code + ' — ' + (ch.challenge_name || ch.name || ch.title || '');
+                    sel.appendChild(opt);
+                }
+            } catch (e) {}
         }
 
         function wizGo1() {
@@ -367,7 +294,12 @@
                 const em = document.querySelector('[name="wp' + i + '_email"]').value.trim();
                 if (!nm || !em) { showError('wizError', 'Fill name and email for Participant ' + (i + 1)); return; }
             }
-            let html = '<div style="padding:12px;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:12px;"><p><strong>Team Name:</strong> ' + escapeHtml(document.getElementById('wTeamName').value.trim()) + '</p><p><strong>Members:</strong> ' + count + '</p></div>';
+            let html = '<div style="padding:12px;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:12px;"><p><strong>Team Name:</strong> ' + escapeHtml(document.getElementById('wTeamName').value.trim()) + '</p><p><strong>Members:</strong> ' + count + '</p>';
+            const challSel = document.getElementById('wChallenge');
+            if (challSel.value) {
+                html += '<p><strong>Challenge:</strong> <span class="badge badge-info">' + escapeHtml(challSel.value) + '</span></p>';
+            }
+            html += '</div>';
             for (let i = 0; i < count; i++) {
                 const nm = document.querySelector('[name="wp' + i + '_name"]').value.trim();
                 const em = document.querySelector('[name="wp' + i + '_email"]').value.trim();
@@ -405,7 +337,8 @@
                 const resp = await API.post('/api/admin/teams', {
                     team_name: document.getElementById('wTeamName').value.trim(),
                     participant_count: count,
-                    participants: participants
+                    participants: participants,
+                    challenge_code: document.getElementById('wChallenge').value || ''
                 });
                 const data = await resp.json();
                 if (resp.ok) {
