@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse, RedirectResponse, Response
 from pydantic import BaseModel
 from app.database import connect_db, close_db, is_db_available, get_db
 from app.security import hash_password, verify_password, create_token
-from app.storage import get_challenge_zip_from_db
+from app.storage import get_challenge_zip_for_download
 
 logger = logging.getLogger(__name__)
 
@@ -134,7 +134,7 @@ async def download_release(token: str):
     if not challenge:
         raise HTTPException(status_code=404, detail="Challenge not found")
 
-    zip_file = await get_challenge_zip_from_db(challenge_code)
+    zip_file = await get_challenge_zip_for_download(challenge_code)
     if not zip_file:
         raise HTTPException(status_code=404, detail="Challenge ZIP is no longer available")
 

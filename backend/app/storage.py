@@ -1,4 +1,6 @@
 import os
+import io
+import zipfile
 import logging
 import gridfs
 from motor.motor_asyncio import AsyncIOMotorGridFSBucket
@@ -190,6 +192,44 @@ async def get_challenge_zip_from_db(challenge_code: str):
     except Exception as e:
         logger.error("Failed to read ZIP for challenge %s: %s", challenge_code, e)
         return None
+
+
+async def build_challenge_zip_from_files(challenge_code: str):
+    """Rebuild the challenge ZIP from the extracted files stored in GridFS.
+
+    Used as a fallback for challenges that were uploaded before the ZIP
+    was persisted, so release download links keep working.
+    """
+    if not is_db_available():
+        return None
+    db = get_db()
+    bucket = AsyncIOMotorGridFSBucket(db, bucket_name=_get_collection_name(challenge_code))
+    try:
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            files = await bucket.find().to_list(length=None)
+            for fdoc in files:
+                grid_out = await bucket.open_download_stream(fdoc["_id"])
+                data = await grid_out.read()
+                zf.writestr(fdoc["filename"], data)
+        return f"{challenge_code}.zip", buf.getvalue()
+    except gridfs.errors.NoFile:
+        return None
+    except Exception as e:
+        logger.error("Failed to rebuild ZIP for challenge %s: %s", challenge_code, e)
+        return None
+
+
+async def get_challenge_zip_for_download(challenge_code: str):
+    """Return (original_filename, content_bytes) for a challenge download.
+
+    Returns the stored original ZIP when available, otherwise rebuilds it
+    from the extracted file tree so legacy challenges still work.
+    """
+    zip_file = await get_challenge_zip_from_db(challenge_code)
+    if zip_file:
+        return zip_file
+    return await build_challenge_zip_from_files(challenge_code)
 
 
 async def delete_challenge_zip_from_db(challenge_code: str):
