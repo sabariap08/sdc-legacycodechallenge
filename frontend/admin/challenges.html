@@ -3,16 +3,20 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Repositories - Legacy Code Rescue</title>
+    <title>Challenges - Legacy Code Rescue</title>
     <link rel="stylesheet" href="/static/css/styles.css">
     <style>
-        .repo-source-toggle { display:flex; gap:4px; background:var(--bg-input); border-radius:var(--radius); padding:4px; margin-bottom:20px; }
-        .repo-source-btn { flex:1; padding:10px 16px; border:none; background:transparent; border-radius:var(--radius-sm); font-size:13px; font-weight:600; color:var(--text-muted); cursor:pointer; transition:var(--transition); font-family:var(--font-sans); text-align:center; }
-        .repo-source-btn.active { background:var(--bg-card); color:var(--text-primary); box-shadow:var(--shadow-sm); }
-        .repo-source-btn:hover:not(.active) { color:var(--text-secondary); }
         .upload-zone { border:2px dashed var(--border); border-radius:var(--radius-md); padding:32px; text-align:center; cursor:pointer; transition:var(--transition); }
         .upload-zone:hover { border-color:var(--primary); background:var(--primary-bg); }
         .upload-zone.dragover { border-color:var(--primary); background:var(--primary-bg); }
+        .file-tree-item { display:flex; align-items:center; gap:8px; padding:5px 8px; border-radius:var(--radius-sm); cursor:pointer; font-size:13px; font-family:var(--font-mono); }
+        .file-tree-item:hover { background:var(--bg-input); }
+        .file-tree-item.folder { font-family:var(--font-sans); font-weight:600; cursor:default; }
+        .file-tree-item.file.clickable { cursor:pointer; }
+        #fileViewer pre { white-space:pre-wrap; word-break:break-word; max-height:600px; overflow:auto; }
+        .viewer-toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:10px 16px; border-bottom:1px solid var(--border); }
+        .viewer-path { font-family:var(--font-mono); font-size:13px; color:var(--text-secondary); }
+        .toggle-node { width:18px; text-align:center; color:var(--text-muted); user-select:none; }
     </style>
 </head>
 <body>
@@ -20,20 +24,55 @@
     <script>
         if (!API.isLoggedIn() || API.role !== 'admin') { window.location.href = '/login'; }
         function logout() { API.clearAuth(); window.location.href = '/login'; }
-        document.body.innerHTML = renderAdminLayout('challenges', 'Repositories');
+        document.body.innerHTML = renderAdminLayout('challenges', 'Challenges');
         initTheme();
         document.getElementById('pageContent').innerHTML = `
             <div class="page-header with-actions">
-                <div><h1>Repositories</h1><p>Import challenge repositories via upload or link</p></div>
-                <button class="btn btn-primary" onclick="showImportModal()">${ICONS.add} New Repository</button>
+                <div><h1>Challenges</h1><p>Upload challenge ZIP files</p></div>
+                <button class="btn btn-primary" onclick="showUploadModal()">${ICONS.add} Upload Challenge</button>
             </div>
             <div class="card">
-                <div class="card-header"><h3>Imported Challenges</h3></div>
+                <div class="card-header"><h3>Challenges</h3></div>
                 <div id="challengesList"><div class="flex-center" style="padding:24px;"><span class="loading-spinner"></span></div></div>
             </div>
+
+            <div id="uploadModal" class="modal-overlay" onclick="closeUploadModal()">
+                <div class="modal" style="max-width:560px;" onclick="event.stopPropagation()">
+                    <div class="modal-header"><h3>Upload Challenge</h3><button class="modal-close" onclick="closeUploadModal()">&times;</button></div>
+                    <div id="upload-error" class="error-message"></div>
+                    <div class="modal-body">
+                        <div class="form-group"><label>Challenge Name <span style="color:var(--danger);">*</span></label><input type="text" id="uploadName" placeholder="e.g. Python Calculator"></div>
+                        <div class="form-group"><label>Challenge Code <span style="color:var(--danger);">*</span></label><input type="text" id="uploadCode" placeholder="e.g. CH-01"></div>
+                        <div class="upload-zone" id="uploadZone" onclick="document.getElementById('fileInput').click()">
+                            <div style="margin-bottom:8px;">${ICONS.archive}</div>
+                            <p style="font-size:14px; font-weight:600; color:var(--text-secondary);">Drop ZIP file here or click to browse</p>
+                            <p style="font-size:12px; color:var(--text-muted); margin-top:4px;">Supports ZIP files containing challenge code</p>
+                            <input type="file" id="fileInput" accept=".zip" style="display:none;" onchange="handleFileSelect(this)">
+                        </div>
+                        <div id="selectedFile" style="display:none; margin-top:12px; padding:10px; background:var(--bg-input); border:1px solid var(--border); border-radius:var(--radius); font-size:13px;"></div>
+                    </div>
+                    <div class="modal-footer">
+                        <button class="btn btn-secondary" onclick="closeUploadModal()">Cancel</button>
+                        <button class="btn btn-primary" onclick="uploadChallenge()" id="uploadBtn">Upload</button>
+                    </div>
+                </div>
+            </div>
+
+            <div id="viewModal" class="modal-overlay" onclick="closeViewModal()">
+                <div class="modal" style="max-width:720px;max-height:90vh;" onclick="event.stopPropagation()">
+                    <div class="modal-header"><h3 id="viewTitle">Challenge Files</h3><button class="modal-close" onclick="closeViewModal()">&times;</button></div>
+                    <div class="viewer-toolbar"><span class="viewer-path" id="viewPath"></span></div>
+                    <div class="modal-body">
+                        <div id="fileTree"><div class="flex-center" style="padding:24px;"><span class="loading-spinner"></span></div></div>
+                        <div id="fileContent" style="display:none;"></div>
+                    </div>
+                    <div class="modal-footer"><button class="btn btn-secondary" onclick="closeViewModal()">Close</button></div>
+                </div>
+            </div>
+
             <div id="deleteModal" class="modal-overlay" onclick="closeDeleteModal()">
                 <div class="modal" onclick="event.stopPropagation()">
-                    <div class="modal-header"><h3>Delete Repository</h3><button class="modal-close" onclick="closeDeleteModal()">&times;</button></div>
+                    <div class="modal-header"><h3>Delete Challenge</h3><button class="modal-close" onclick="closeDeleteModal()">&times;</button></div>
                     <div class="modal-body"><p id="deleteBody">Are you sure?</p></div>
                     <div class="modal-footer">
                         <button class="btn btn-secondary" onclick="closeDeleteModal()">Cancel</button>
@@ -41,47 +80,14 @@
                     </div>
                 </div>
             </div>
-            <div id="importModal" class="modal-overlay">
-                <div class="modal" style="max-width:560px;">
-                    <div class="modal-header"><h3>New Repository</h3><button class="modal-close" onclick="closeImportModal()">&times;</button></div>
-                    <div id="import-error" class="error-message"></div>
-                    <div class="repo-source-toggle">
-                        <button class="repo-source-btn active" onclick="switchSource('upload', this)">Upload</button>
-                        <button class="repo-source-btn" onclick="switchSource('link', this)">Link</button>
-                    </div>
-                    <div id="uploadForm">
-                        <div class="form-group"><label>Challenge Name <span style="color:var(--danger);">*</span></label><input type="text" id="uploadName" placeholder="e.g. Python Calculator"></div>
-                        <div class="form-group"><label>Challenge Code <span style="color:var(--danger);">*</span></label><input type="text" id="uploadCode" placeholder="e.g. CH-01"></div>
-                        <div class="upload-zone" id="uploadZone" onclick="document.getElementById('fileInput').click()">
-                            <div style="margin-bottom:8px;">${ICONS.archive}</div>
-                            <p style="font-size:14px; font-weight:600; color:var(--text-secondary);">Drop ZIP file here or click to browse</p>
-                            <p style="font-size:12px; color:var(--text-muted); margin-top:4px;">Supports ZIP files containing code</p>
-                            <input type="file" id="fileInput" accept=".zip" style="display:none;" onchange="handleFileSelect(this)">
-                        </div>
-                        <div id="selectedFile" style="display:none; margin-top:12px; padding:10px; background:var(--bg-input); border:1px solid var(--border); border-radius:var(--radius); font-size:13px;"></div>
-                    </div>
-                    <div id="linkForm" style="display:none;">
-                        <div class="form-group"><label>Challenge Code <span style="color:var(--danger);">*</span></label><input type="text" id="importCode" placeholder="e.g. CH-01"></div>
-                        <div class="form-group"><label>Repository URL <span style="color:var(--danger);">*</span></label><input type="url" id="importUrl" placeholder="https://github.com/owner/repo.git"></div>
-                    </div>
-                    <div class="modal-footer">
-                        <button class="btn btn-secondary" onclick="closeImportModal()">Cancel</button>
-                        <button class="btn btn-primary" onclick="importRepo()" id="importBtn">Import</button>
-                    </div>
-                </div>
-            </div>
         `;
-        let currentSource = 'upload';
+
         let selectedFile = null;
-        function switchSource(source, btn) {
-            currentSource = source;
-            document.querySelectorAll('.repo-source-btn').forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
-            document.getElementById('uploadForm').style.display = source === 'upload' ? '' : 'none';
-            document.getElementById('linkForm').style.display = source === 'link' ? '' : 'none';
-        }
-        function showImportModal() { document.getElementById('importModal').classList.add('active'); }
-        function closeImportModal() { document.getElementById('importModal').classList.remove('active'); selectedFile = null; document.getElementById('selectedFile').style.display = 'none'; hideError('import-error'); }
+        let currentTree = null;
+        let currentCode = null;
+
+        function showUploadModal() { document.getElementById('uploadModal').classList.add('active'); }
+        function closeUploadModal() { document.getElementById('uploadModal').classList.remove('active'); selectedFile = null; document.getElementById('selectedFile').style.display = 'none'; hideError('upload-error'); }
         function handleFileSelect(input) {
             if (input.files.length > 0) {
                 selectedFile = input.files[0];
@@ -89,65 +95,132 @@
                 document.getElementById('selectedFile').style.display = '';
             }
         }
+
         const zone = document.getElementById('uploadZone');
         if (zone) {
             zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('dragover'); });
             zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
             zone.addEventListener('drop', e => { e.preventDefault(); zone.classList.remove('dragover'); if (e.dataTransfer.files.length) { document.getElementById('fileInput').files = e.dataTransfer.files; handleFileSelect(document.getElementById('fileInput')); }});
         }
-        async function importRepo() {
-            hideError('import-error');
-            if (currentSource === 'link') {
-                const code = document.getElementById('importCode').value.trim();
-                const url = document.getElementById('importUrl').value.trim();
-                if (!code || !url) { showError('import-error', 'Fill all fields'); return; }
-                const btn = document.getElementById('importBtn'); btn.disabled = true; btn.innerHTML = '<span class="loading-spinner"></span>';
-                try {
-                    const resp = await API.post('/api/admin/import-repositories', { challenges: [{ challenge_code: code, repository_url: url }] });
-                    const data = await resp.json();
-                    if (resp.ok) { closeImportModal(); loadChallenges(); }
-                    else { showError('import-error', data.detail || 'Import failed'); }
-                } catch (err) { showError('import-error', err.message); }
-                btn.disabled = false; btn.innerHTML = 'Import';
-            } else {
-                const name = document.getElementById('uploadName').value.trim();
-                const code = document.getElementById('uploadCode').value.trim();
-                if (!name || !code) { showError('import-error', 'Challenge name and code are required'); return; }
-                if (!selectedFile) { showError('import-error', 'Please select a ZIP file'); return; }
-                if (!selectedFile.name.toLowerCase().endsWith('.zip')) { showError('import-error', 'Only ZIP files are supported'); return; }
-                const btn = document.getElementById('importBtn'); btn.disabled = true; btn.innerHTML = '<span class="loading-spinner"></span>';
-                const formData = new FormData();
-                formData.append('challenge_name', name);
-                formData.append('challenge_code', code);
-                formData.append('file', selectedFile);
-                try {
-                    const headers = {};
-                    if (API.token) headers['Authorization'] = 'Bearer ' + API.token;
-                    const resp = await fetch('/api/admin/upload-challenge', { method: 'POST', headers, body: formData });
-                    const data = await resp.json();
-                    if (resp.ok) { closeImportModal(); loadChallenges(); }
-                    else { showError('import-error', data.detail || 'Upload failed'); }
-                } catch (err) { showError('import-error', err.message); }
-                btn.disabled = false; btn.innerHTML = 'Import';
-            }
+
+        async function uploadChallenge() {
+            hideError('upload-error');
+            const name = document.getElementById('uploadName').value.trim();
+            const code = document.getElementById('uploadCode').value.trim();
+            if (!name || !code) { showError('upload-error', 'Challenge name and code are required'); return; }
+            if (!selectedFile) { showError('upload-error', 'Please select a ZIP file'); return; }
+            if (!selectedFile.name.toLowerCase().endsWith('.zip')) { showError('upload-error', 'Only ZIP files are supported'); return; }
+            const btn = document.getElementById('uploadBtn'); btn.disabled = true; btn.innerHTML = '<span class="loading-spinner"></span> Uploading...';
+            const formData = new FormData();
+            formData.append('challenge_name', name);
+            formData.append('challenge_code', code);
+            formData.append('file', selectedFile);
+            try {
+                const headers = {};
+                if (API.token) headers['Authorization'] = 'Bearer ' + API.token;
+                const resp = await fetch('/api/admin/challenges', { method: 'POST', headers, body: formData });
+                const data = await resp.json();
+                if (resp.ok) { closeUploadModal(); loadChallenges(); }
+                else { showError('upload-error', data.detail || 'Upload failed'); }
+            } catch (err) { showError('upload-error', 'Connection error'); }
+            btn.disabled = false; btn.innerHTML = 'Upload';
         }
+
         function showDeleteModal(code, name) {
-            document.getElementById('deleteBody').textContent = 'Delete repository "' + name + '" (' + code + ')? This will permanently remove all files from disk.';
-            document.getElementById('deleteConfirmBtn').onclick = () => { closeDeleteModal(); deleteRepo(code); };
+            document.getElementById('deleteBody').textContent = 'Delete challenge "' + name + '" (' + code + ')? This will permanently remove the challenge and its files.';
+            document.getElementById('deleteConfirmBtn').onclick = () => { closeDeleteModal(); deleteChallenge(code); };
             document.getElementById('deleteModal').classList.add('active');
         }
         function closeDeleteModal() { document.getElementById('deleteModal').classList.remove('active'); }
 
-        async function deleteRepo(code) {
+        async function deleteChallenge(code) {
             try {
-                const resp = await API.del('/api/admin/challenges/' + code);
+                const resp = await API.del('/api/admin/challenges/' + encodeURIComponent(code));
                 if (resp && resp.ok) { loadChallenges(); }
                 else { const d = resp ? await resp.json() : {}; alert(d.detail || 'Failed to delete'); }
             } catch(e) { alert('Connection error'); }
         }
 
-        function viewRepo(code) {
-            window.location.href = '/admin/repo-viewer?code=' + encodeURIComponent(code);
+        function showViewModal(code, name) {
+            currentCode = code;
+            document.getElementById('viewTitle').textContent = 'Files - ' + (name || code);
+            document.getElementById('viewPath').textContent = code + '/';
+            document.getElementById('fileContent').style.display = 'none';
+            document.getElementById('fileTree').style.display = '';
+            document.getElementById('viewModal').classList.add('active');
+            loadFileTree(code);
+        }
+        function closeViewModal() { document.getElementById('viewModal').classList.remove('active'); }
+
+        async function loadFileTree(code) {
+            document.getElementById('fileTree').innerHTML = '<div class="flex-center" style="padding:24px;"><span class="loading-spinner"></span></div>';
+            try {
+                const resp = await API.get('/api/admin/challenges/' + encodeURIComponent(code) + '/file-tree');
+                if (!resp) return;
+                const data = await resp.json();
+                if (data.empty) {
+                    document.getElementById('fileTree').innerHTML = '<div class="empty-state"><div class="empty-icon">' + ICONS.inbox + '</div><h3>No files</h3></div>';
+                    return;
+                }
+                currentTree = data.tree;
+                renderTree(data.tree, null, 0);
+            } catch(e) { document.getElementById('fileTree').innerHTML = '<p class="text-muted">Failed to load files</p>'; }
+        }
+
+        function renderTree(tree, parentPath, depth) {
+            const container = document.getElementById('fileTree');
+            container.style.display = '';
+            const folders = tree.filter(n => n.type === 'directory').sort((a,b)=>a.name.localeCompare(b.name));
+            const files = tree.filter(n => n.type === 'file').sort((a,b)=>a.name.localeCompare(b.name));
+            let html = '';
+            for (const f of folders) {
+                const rel = (parentPath ? parentPath + '/' : '') + f.name;
+                html += `<div class="file-tree-item folder"><span class="toggle-node">${ICONS.folder}</span><span>${escapeHtml(f.name)}/</span></div>`;
+                html += `<div style="padding-left:${(depth+1)*18}px;">`;
+                html += renderChildren(f.children, rel, depth + 1);
+                html += `</div>`;
+            }
+            for (const f of files) {
+                const rel = (parentPath ? parentPath + '/' : '') + f.name;
+                html += `<div class="file-tree-item"><span class="toggle-node">${ICONS.file}</span><span class="clickable" onclick="viewFile('${escapeHtml(rel)}')">${escapeHtml(f.name)}</span></div>`;
+            }
+            container.innerHTML = html;
+        }
+
+        function renderChildren(children, parentPath, depth) {
+            if (!children) return '';
+            const folders = children.filter(n => n.type === 'directory').sort((a,b)=>a.name.localeCompare(b.name));
+            const files = children.filter(n => n.type === 'file').sort((a,b)=>a.name.localeCompare(b.name));
+            let html = '';
+            for (const f of folders) {
+                const rel = parentPath + '/' + f.name;
+                html += `<div class="file-tree-item folder"><span class="toggle-node">${ICONS.folder}</span><span>${escapeHtml(f.name)}/</span></div>`;
+                html += `<div style="padding-left:${(depth+1)*18}px;">`;
+                html += renderChildren(f.children, rel, depth + 1);
+                html += `</div>`;
+            }
+            for (const f of files) {
+                const rel = parentPath + '/' + f.name;
+                html += `<div class="file-tree-item"><span class="toggle-node">${ICONS.file}</span><span class="clickable" onclick="viewFile('${escapeHtml(rel)}')">${escapeHtml(f.name)}</span></div>`;
+            }
+            return html;
+        }
+
+        async function viewFile(path) {
+            document.getElementById('viewPath').textContent = currentCode + '/' + path;
+            document.getElementById('fileContent').innerHTML = '<div class="flex-center" style="padding:24px;"><span class="loading-spinner"></span></div>';
+            document.getElementById('fileContent').style.display = '';
+            try {
+                const resp = await API.get('/api/admin/challenges/' + encodeURIComponent(currentCode) + '/file?path=' + encodeURIComponent(path));
+                if (!resp) return;
+                const data = await resp.json();
+                if (data.binary) {
+                    document.getElementById('fileContent').innerHTML = '<p class="text-muted">Binary file - cannot display (' + data.size + ' bytes)</p>';
+                } else {
+                    const lang = /\.(js|ts|py|java|c|cpp|h|cs|go|rb|php|html|css|json|sh|yml|yaml|xml|md|txt)$/i.test(path) ? '' : 'nohighlight';
+                    document.getElementById('fileContent').innerHTML = `<pre class="${lang}">${escapeHtml(data.content)}</pre>`;
+                }
+            } catch(e) { document.getElementById('fileContent').innerHTML = '<p class="text-muted">Failed to load file</p>'; }
         }
 
         async function loadChallenges() {
@@ -155,20 +228,18 @@
             if (!resp) return;
             const data = await resp.json();
             if (data.challenges.length === 0) {
-                document.getElementById('challengesList').innerHTML = '<div class="empty-state"><div class="empty-icon">' + ICONS.inbox + '</div><h3>No challenges imported</h3><p>Click "New Repository" to add challenges</p></div>';
+                document.getElementById('challengesList').innerHTML = '<div class="empty-state"><div class="empty-icon">' + ICONS.inbox + '</div><h3>No challenges uploaded</h3><p>Click "Upload Challenge" to add challenge files</p></div>';
                 return;
             }
-            let html = '<div class="table-container"><table><thead><tr><th>Challenge</th><th>Name</th><th>Source</th><th>Status</th><th>Imported</th><th>Actions</th></tr></thead><tbody>';
+            let html = '<div class="table-container"><table><thead><tr><th>Challenge</th><th>Name</th><th>Files</th><th>Uploaded</th><th>Actions</th></tr></thead><tbody>';
             for (const ch of data.challenges) {
-                const sourceBadge = ch.repository_source === 'upload' ? '<span class="badge badge-info">Upload</span>' : '<span class="badge badge-neutral">Link</span>';
                 html += '<tr>';
                 html += '<td><strong class="font-mono">' + escapeHtml(ch.challenge_code) + '</strong></td>';
                 html += '<td>' + escapeHtml(ch.challenge_name || ch.challenge_code) + '</td>';
-                html += '<td>' + sourceBadge + '</td>';
-                html += '<td>' + getStatusBadge(ch.status) + '</td>';
-                html += '<td>' + formatDate(ch.imported_at) + '</td>';
+                html += '<td>' + (ch.file_count || 0) + '</td>';
+                html += '<td>' + formatDate(ch.created_at || ch.updated_at) + '</td>';
                 html += '<td><div class="flex gap-1">';
-                html += '<button class="btn btn-sm btn-secondary" onclick="viewRepo(\'' + escapeHtml(ch.challenge_code) + '\')">View</button>';
+                html += '<button class="btn btn-sm btn-secondary" onclick="showViewModal(\'' + escapeHtml(ch.challenge_code) + '\',\'' + escapeHtml(ch.challenge_name || ch.challenge_code) + '\')">View</button>';
                 html += '<button class="btn btn-sm btn-danger" onclick="showDeleteModal(\'' + escapeHtml(ch.challenge_code) + '\',\'' + escapeHtml(ch.challenge_name || ch.challenge_code) + '\')">Delete</button>';
                 html += '</div></td></tr>';
             }

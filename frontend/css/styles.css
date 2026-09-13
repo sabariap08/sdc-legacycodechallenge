@@ -855,6 +855,221 @@ a:focus-visible {
     line-height: 1.2;
 }
 
+.stat-card .stat-sub {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 6px;
+}
+
+/* --- PAGE ACTIONS --- */
+.page-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.btn-outline {
+    background: transparent;
+    color: var(--primary);
+    border-color: var(--primary-border);
+}
+
+.btn-outline:hover:not(:disabled) {
+    background: var(--primary-bg);
+    color: var(--primary);
+    box-shadow: 0 0 0 3px var(--primary-bg);
+}
+
+/* --- DASHBOARD OVERVIEW --- */
+.dash-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    align-items: start;
+}
+
+.overview-block {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.overview-total {
+    text-align: center;
+}
+
+.overview-number {
+    font-size: 44px;
+    font-weight: 700;
+    color: var(--text-primary);
+    line-height: 1.1;
+}
+
+.overview-label {
+    font-size: 13px;
+    color: var(--text-muted);
+}
+
+.bar-track {
+    display: flex;
+    width: 100%;
+    height: 12px;
+    border-radius: var(--radius-full);
+    overflow: hidden;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+}
+
+.bar-fill {
+    height: 100%;
+    transition: width 0.4s ease;
+}
+
+.bar-legend {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.legend-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-right: 6px;
+}
+
+/* --- RECENT CHALLENGES --- */
+.recent-list {
+    list-style: none;
+}
+
+.recent-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 8px;
+    border-bottom: 1px solid var(--border);
+}
+
+.recent-item:last-child {
+    border-bottom: none;
+}
+
+.recent-icon {
+    width: 34px;
+    height: 34px;
+    border-radius: var(--radius);
+    background: var(--primary-bg);
+    color: var(--primary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.recent-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.recent-name {
+    font-weight: 600;
+    font-size: 13px;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.recent-meta {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.recent-link {
+    font-size: 13px;
+    font-weight: 600;
+    flex-shrink: 0;
+}
+
+.empty-state.small {
+    padding: 24px;
+}
+
+/* --- REPORT DOWNLOAD CARDS --- */
+.report-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 14px;
+    margin-bottom: 16px;
+}
+
+.report-card {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 18px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    cursor: pointer;
+    transition: box-shadow 0.15s ease, transform 0.15s ease, border-color 0.15s ease;
+}
+
+.report-card:hover {
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+    transform: translateY(-2px);
+    border-color: var(--primary);
+}
+
+.report-card-icon {
+    width: 46px;
+    height: 46px;
+    border-radius: var(--radius);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    background: var(--primary-bg);
+    color: var(--primary);
+}
+
+.report-card-icon.secondary { background: var(--secondary-bg); color: var(--secondary); }
+.report-card-icon.warning { background: var(--warning-bg); color: var(--warning); }
+.report-card-icon.success { background: var(--success-bg); color: var(--success); }
+.report-card-icon.danger { background: var(--danger-bg); color: var(--danger); }
+
+.report-card-title {
+    font-weight: 600;
+    font-size: 14px;
+    color: var(--text-primary);
+}
+
+.report-card-desc {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 2px;
+}
+
+.report-card-link {
+    margin-left: auto;
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    transition: color 0.15s ease;
+}
+
+.report-card:hover .report-card-link {
+    color: var(--primary);
+}
+
+
+
 /* --- TABLES --- */
 .table-container {
     overflow-x: auto;
@@ -1076,6 +1291,10 @@ table td strong {
 
 .modal-overlay.active .modal {
     transform: translateY(0);
+}
+
+.modal-lg {
+    max-width: 640px;
 }
 
 .modal-header {
@@ -1301,137 +1520,6 @@ table td strong {
     color: var(--text-muted);
 }
 
-/* --- STEP INDICATOR --- */
-.steps {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-bottom: 24px;
-    overflow-x: auto;
-    padding-bottom: 4px;
-}
-
-.step {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 13px;
-    color: var(--text-muted);
-    white-space: nowrap;
-}
-
-.step.active {
-    color: var(--primary);
-    font-weight: 600;
-}
-
-.step.completed {
-    color: var(--success);
-}
-
-.step-number {
-    width: 24px;
-    height: 24px;
-    border-radius: var(--radius-full);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 11px;
-    font-weight: 700;
-    background: var(--bg-input);
-    border: 1px solid var(--border);
-    color: var(--text-muted);
-    flex-shrink: 0;
-}
-
-.step.active .step-number {
-    background: var(--primary);
-    border-color: var(--primary);
-    color: white;
-}
-
-.step.completed .step-number {
-    background: var(--success);
-    border-color: var(--success);
-    color: white;
-}
-
-.step-divider {
-    width: 24px;
-    height: 1px;
-    background: var(--border);
-    flex-shrink: 0;
-}
-
-/* --- EVENT STATUS FLOW --- */
-.status-flow {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    flex-wrap: wrap;
-}
-
-.status-flow .flow-step {
-    padding: 6px 12px;
-    border-radius: var(--radius);
-    font-size: 12px;
-    font-weight: 600;
-    background: var(--bg-input);
-    border: 1px solid var(--border);
-    color: var(--text-muted);
-}
-
-.status-flow .flow-step.current {
-    background: var(--primary-bg);
-    border-color: var(--primary-border);
-    color: var(--primary);
-}
-
-.status-flow .flow-step.past {
-    background: var(--success-bg);
-    border-color: var(--success-border);
-    color: var(--success);
-}
-
-.flow-arrow {
-    color: var(--text-muted);
-    font-size: 12px;
-}
-
-/* --- BLOCKED USERS --- */
-.blocked-user {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 10px 14px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    margin-bottom: 8px;
-    flex-wrap: wrap;
-    gap: 8px;
-}
-
-.blocked-user .user-info {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    min-width: 0;
-}
-
-.blocked-user .user-info .avatar {
-    width: 32px;
-    height: 32px;
-    border-radius: var(--radius-full);
-    background: var(--danger-bg);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--danger);
-    font-size: 14px;
-    font-weight: 700;
-    flex-shrink: 0;
-}
-
 /* ============================================
    RESPONSIVE DESIGN
    ============================================ */
@@ -1448,6 +1536,10 @@ table td strong {
 
     .grid-3 {
         grid-template-columns: 1fr 1fr;
+    }
+
+    .dash-grid {
+        grid-template-columns: 1fr;
     }
 }
 
@@ -1567,29 +1659,6 @@ table td strong {
         padding: 20px;
     }
 
-    /* Steps */
-    .steps {
-        gap: 4px;
-    }
-
-    .step {
-        font-size: 12px;
-    }
-
-    .step-divider {
-        width: 12px;
-    }
-
-    /* Status flow */
-    .status-flow .flow-step {
-        font-size: 10px;
-        padding: 4px 8px;
-    }
-
-    .flow-arrow {
-        font-size: 10px;
-    }
-
     /* Team detail */
     .team-detail-header {
         padding: 16px;
@@ -1606,6 +1675,11 @@ table td strong {
     .stats-grid {
         grid-template-columns: 1fr;
     }
+
+    .report-grid {
+        grid-template-columns: 1fr;
+    }
+}
 
     .page-content {
         padding: 12px;
@@ -1636,11 +1710,6 @@ table td strong {
         padding: 10px 20px;
         font-size: 14px;
     }
-
-    .blocked-user {
-        flex-direction: column;
-        align-items: flex-start;
-    }
 }
 
 /* --- PRINT --- */
@@ -1652,9 +1721,3 @@ table td strong {
         margin-left: 0;
     }
 }
-
-/* ============================================
-   IDE STYLES - now inline in ide.html
-   Legacy IDE CSS removed - new layout uses
-   Catppuccin-inspired inline styles
-   ============================================ */

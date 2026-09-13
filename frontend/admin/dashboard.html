@@ -17,39 +17,109 @@
             <div class="page-header with-actions">
                 <div>
                     <h1>Dashboard</h1>
-                    <p>Overview of the Legacy Code Rescue event</p>
+                    <p>Overview of challenges, teams and allocations</p>
+                </div>
+                <div class="page-actions">
+                    <a href="/admin/challenges" class="btn btn-primary">${ICONS.upload} Upload Challenge</a>
+                    <a href="/admin/teams" class="btn btn-outline">${ICONS.teams} Create Team</a>
                 </div>
             </div>
+
             <div class="stats-grid" id="statsGrid"></div>
-            <div class="card">
-                <div class="card-header"><h3>Challenge Distribution</h3></div>
-                <div id="challengeDistribution"><div class="flex-center" style="padding:24px;"><span class="loading-spinner"></span></div></div>
+
+            <div class="dash-grid">
+                <div class="card">
+                    <div class="card-header"><h3>Allocation Overview</h3></div>
+                    <div id="overview"><div class="flex-center" style="padding:24px;"><span class="loading-spinner"></span></div></div>
+                </div>
+                <div class="card">
+                    <div class="card-header"><h3>Recent Challenges</h3></div>
+                    <div id="recentChallenges"><div class="flex-center" style="padding:24px;"><span class="loading-spinner"></span></div></div>
+                </div>
             </div>
         `;
+
         async function loadDashboard() {
             try {
                 const resp = await API.get('/api/admin/dashboard');
                 if (!resp) return;
                 const data = await resp.json();
+
                 document.getElementById('statsGrid').innerHTML = `
-                    <div class="stat-card"><div class="stat-header"><span class="stat-label">Total Teams</span><span class="stat-icon primary">${ICONS.teams}</span></div><div class="stat-value">${data.total_teams}</div></div>
-                    <div class="stat-card"><div class="stat-header"><span class="stat-label">Participants</span><span class="stat-icon secondary">${ICONS.users}</span></div><div class="stat-value">${data.total_participants}</div></div>
-                    <div class="stat-card"><div class="stat-header"><span class="stat-label">Ready Challenges</span><span class="stat-icon success">${ICONS.checkCircle}</span></div><div class="stat-value">${data.ready_challenges}</div></div>
-                    <div class="stat-card"><div class="stat-header"><span class="stat-label">Allocated</span><span class="stat-icon warning">${ICONS.target}</span></div><div class="stat-value">${data.allocated_teams}</div></div>
-                    <div class="stat-card"><div class="stat-header"><span class="stat-label">Submissions</span><span class="stat-icon primary">${ICONS.fileText}</span></div><div class="stat-value">${data.total_submissions}</div></div>
-                    <div class="stat-card"><div class="stat-header"><span class="stat-label">Event Status</span><span class="stat-icon success">${ICONS.clock}</span></div><div class="stat-value" style="font-size:14px;margin-top:4px;">${getStatusBadge(data.event_status)}</div></div>
+                    <div class="stat-card">
+                        <div class="stat-header"><span class="stat-label">Challenges</span><span class="stat-icon primary">${ICONS.archive}</span></div>
+                        <div class="stat-value">${data.total_challenges}</div>
+                        <div class="stat-sub">Total uploaded</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-header"><span class="stat-label">Teams</span><span class="stat-icon secondary">${ICONS.teams}</span></div>
+                        <div class="stat-value">${data.total_teams}</div>
+                        <div class="stat-sub">Total registered</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-header"><span class="stat-label">Members</span><span class="stat-icon success">${ICONS.users}</span></div>
+                        <div class="stat-value">${data.total_team_members}</div>
+                        <div class="stat-sub">Across all teams</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-header"><span class="stat-label">Allocated</span><span class="stat-icon warning">${ICONS.target}</span></div>
+                        <div class="stat-value">${data.allocated_teams}</div>
+                        <div class="stat-sub">Teams with a challenge</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-header"><span class="stat-label">Unallocated</span><span class="stat-icon danger">${ICONS.alertCircle}</span></div>
+                        <div class="stat-value">${data.unallocated_teams}</div>
+                        <div class="stat-sub">Pending allocation</div>
+                    </div>
                 `;
 
-                let distHtml = '<div class="table-container"><table><thead><tr><th>Challenge</th><th>Status</th><th>Teams</th></tr></thead><tbody>';
-                for (const ch of data.challenge_distribution) {
-                    distHtml += `<tr><td><strong>${escapeHtml(ch.challenge_name || ch.challenge_code)}</strong><br><small class="text-muted">${escapeHtml(ch.challenge_code)}</small></td><td>${getStatusBadge(ch.status)}</td><td>${ch.allocated_teams}</td></tr>`;
-                }
-                distHtml += '</tbody></table></div>';
-                if (data.challenge_distribution.length === 0) distHtml = '<div class="empty-state"><div class="empty-icon">' + ICONS.inbox + '</div><h3>No challenges imported</h3><p>Import repositories from the Repositories page</p></div>';
-                document.getElementById('challengeDistribution').innerHTML = distHtml;
+                const allocatedPct = data.total_teams > 0 ? Math.round((data.allocated_teams / data.total_teams) * 100) : 0;
+                const unallocatedPct = 100 - allocatedPct;
+                document.getElementById('overview').innerHTML = `
+                    <div class="overview-block">
+                        <div class="overview-total">
+                            <div class="overview-number">${data.total_teams}</div>
+                            <div class="overview-label">Total Teams</div>
+                        </div>
+                        <div class="bar-track">
+                            <div class="bar-fill" style="width:${allocatedPct}%;background:var(--success);"></div>
+                            <div class="bar-fill" style="width:${unallocatedPct}%;background:var(--warning);"></div>
+                        </div>
+                        <div class="bar-legend">
+                            <span><span class="legend-dot" style="background:var(--success);"></span>Allocated (${data.allocated_teams})</span>
+                            <span><span class="legend-dot" style="background:var(--warning);"></span>Unallocated (${data.unallocated_teams})</span>
+                        </div>
+                    </div>
+                `;
             } catch (err) { console.error('Dashboard load error:', err); }
         }
+
+        async function loadRecentChallenges() {
+            try {
+                const resp = await API.get('/api/admin/challenges');
+                if (!resp) return;
+                const data = await resp.json();
+                const list = (data.challenges || []).slice(0, 5);
+                if (list.length === 0) {
+                    document.getElementById('recentChallenges').innerHTML = '<div class="empty-state small"><div class="empty-icon">' + ICONS.inbox + '</div><h3>No challenges yet</h3><p>Upload a challenge to get started</p></div>';
+                    return;
+                }
+                let html = '<ul class="recent-list">';
+                for (const c of list) {
+                    html += '<li class="recent-item">';
+                    html += '<div class="recent-icon">' + ICONS.archive + '</div>';
+                    html += '<div class="recent-info"><div class="recent-name">' + escapeHtml(c.challenge_name || c.challenge_code) + '</div><div class="recent-meta"><span class="font-mono">' + escapeHtml(c.challenge_code) + '</span> &middot; ' + (c.file_count || 0) + ' files</div></div>';
+                    html += '<a href="/admin/challenges" class="recent-link">View</a>';
+                    html += '</li>';
+                }
+                html += '</ul>';
+                html += '<div class="mt-2"><a href="/admin/challenges" class="btn btn-sm btn-outline">View all challenges</a></div>';
+                document.getElementById('recentChallenges').innerHTML = html;
+            } catch (e) { document.getElementById('recentChallenges').innerHTML = '<p class="text-muted">Failed to load</p>'; }
+        }
+
         loadDashboard();
+        loadRecentChallenges();
     </script>
 </body>
 </html>

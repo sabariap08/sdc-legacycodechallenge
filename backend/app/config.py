@@ -15,9 +15,29 @@ ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin@123")
 SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-key-change-in-production")
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 JWT_EXPIRE_MINUTES = int(os.getenv("JWT_EXPIRE_MINUTES", "480"))
-CHALLENGE_STORAGE_PATH = os.path.join(PROJECT_ROOT, os.getenv("CHALLENGE_STORAGE_DIR", "challenge_storage"))
-TEAM_WORKSPACE_PATH = os.path.join(PROJECT_ROOT, os.getenv("TEAM_WORKSPACE_DIR", "team_workspaces"))
-EVALUATOR_PATH = os.path.join(PROJECT_ROOT, os.getenv("EVALUATOR_DIR", "evaluator"))
+
+MAX_ZIP_SIZE_MB = int(os.getenv("MAX_ZIP_SIZE_MB", "100"))
+
+PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "")
+
+EMAIL_ADDRESS = os.getenv("EMAIL_ADDRESS", "")
+EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD", "")
+SENDER_DISPLAY_NAME = os.getenv("SENDER_DISPLAY_NAME", "Legacy Code Rescue")
+
+SMTP_HOST = os.getenv("SMTP_HOST", "")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USERNAME = os.getenv("SMTP_USERNAME", "") or EMAIL_ADDRESS
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "") or EMAIL_PASSWORD
+SMTP_USE_TLS = os.getenv("SMTP_USE_TLS", "true").lower() in ("1", "true", "yes")
+SMTP_USE_SSL = os.getenv("SMTP_USE_SSL", "false").lower() in ("1", "true", "yes")
+
+if EMAIL_ADDRESS and SENDER_DISPLAY_NAME:
+    _default_from = f"{SENDER_DISPLAY_NAME} <{EMAIL_ADDRESS}>"
+elif EMAIL_ADDRESS:
+    _default_from = EMAIL_ADDRESS
+else:
+    _default_from = ""
+SMTP_FROM = os.getenv("SMTP_FROM", "") or _default_from
 
 if not MONGODB_URI:
     logger.error("MONGODB_URI is missing. Set the MONGODB_URI environment variable.")

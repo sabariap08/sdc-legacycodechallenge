@@ -47,7 +47,6 @@ async def connect_db():
         _db_available = True
         logger.info("MongoDB connected successfully")
         await _create_indexes()
-        await _ensure_event_settings()
         return db
     except Exception as e:
         _db_available = False
@@ -80,7 +79,6 @@ async def _reconnect_loop():
             _db_available = True
             logger.info("MongoDB reconnected successfully")
             await _create_indexes()
-            await _ensure_event_settings()
         except Exception as e:
             _db_available = False
             logger.warning("MongoDB reconnect attempt failed: %s", e)
@@ -107,74 +105,11 @@ def get_db():
 
 
 async def _create_indexes():
+    await db.admins.create_index("username", unique=True)
+    await db.challenges.create_index("challenge_code", unique=True)
     await db.teams.create_index("team_code", unique=True)
     await db.teams.create_index("team_name", unique=True)
-    await db.teams.create_index("bin_number", unique=True)
-    await db.participants.create_index("email", unique=True)
-    await db.participants.create_index("team_code")
-    await db.challenges.create_index("challenge_code", unique=True)
-    await db.teams.create_index("challenge_code")
-    await db.submissions.create_index("team_code")
-    await db.submissions.create_index("challenge_code")
-    await db.submissions.create_index("event_id")
-    await db.admins.create_index("username", unique=True)
+    await db.allocations.create_index("team_code", unique=True)
+    await db.releases.create_index("released_at")
+    await db.releases.create_index("download_token", sparse=True, unique=True)
     await db.audit_logs.create_index("timestamp")
-    await db.announcements.create_index("created_at")
-    await db.blocked_users.create_index("email", unique=True)
-    await db.events.create_index("event_code", unique=True)
-    await db.events.create_index("status")
-    await db.events.create_index("created_datetime")
-    await db.event_settings.create_index("event_code", sparse=True)
-    await db.event_history.create_index("archived_at")
-    await db.event_history.create_index("event_code", sparse=True)
-
-
-async def _ensure_event_settings():
-    """Bootstrap the events collection as the single source of truth.
-
-    A legacy event_settings doc (if present) is migrated into the events
-    collection so no historical state is lost.
-    """
-    from app.utils import generate_event_code
-    from datetime import datetime as _dt
-
-    existing_event = await db.events.find_one({})
-    if existing_event:
-        return
-
-    legacy = await db.event_settings.find_one({})
-    if legacy:
-        await db.events.insert_one({
-            "event_id": legacy.get("event_id") or str(_dt.utcnow().timestamp()),
-            "event_code": legacy.get("event_code") or generate_event_code(),
-            "status": legacy.get("status", "UPCOMING"),
-            "event_start_time": legacy.get("event_start_time"),
-            "event_end_time": legacy.get("event_end_time"),
-            "leaderboard_enabled": legacy.get("leaderboard_enabled", False),
-            "created_datetime": _dt.utcnow(),
-            "updated_at": _dt.utcnow(),
-            "deleted_datetime": None,
-            "deletion_reason": None,
-        })
-        return
-
-    await db.events.insert_one({
-        "event_id": str(_dt.utcnow().timestamp()),
-        "event_code": generate_event_code(),
-        "status": "UPCOMING",
-        "event_start_time": None,
-        "event_end_time": None,
-        "leaderboard_enabled": False,
-        "created_datetime": _dt.utcnow(),
-        "updated_at": _dt.utcnow(),
-        "deleted_datetime": None,
-        "deletion_reason": None,
-    })
-
-
-async def get_active_event():
-    """Return the newest current (non-deleted) event document, or None."""
-    return await db.events.find_one(
-        {"deleted_datetime": None},
-        sort=[("created_datetime", -1)],
-    )

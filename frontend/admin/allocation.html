@@ -3,48 +3,255 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Challenge Assignments - Legacy Code Rescue</title>
+    <title>Challenge Allocation - Legacy Code Rescue</title>
     <link rel="stylesheet" href="/static/css/styles.css">
+    <style>
+        .alloc-row { display:flex; align-items:center; gap:10px; padding:10px 4px; border-bottom:1px solid var(--border); }
+        .alloc-row:last-child { border-bottom:none; }
+        .alloc-team { flex:1; min-width:0; }
+        .alloc-team-name { font-weight:600; font-size:13px; color:var(--text-primary); }
+        .alloc-team-meta { font-size:12px; color:var(--text-muted); }
+        .alloc-select { flex:1; max-width:340px; }
+    </style>
 </head>
 <body>
     <script src="/static/js/api.js"></script>
     <script>
         if (!API.isLoggedIn() || API.role !== 'admin') { window.location.href = '/login'; }
         function logout() { API.clearAuth(); window.location.href = '/login'; }
-        document.body.innerHTML = renderAdminLayout('allocation', 'Challenge Assignments');
+        document.body.innerHTML = renderAdminLayout('allocation', 'Challenge Allocation');
         initTheme();
         document.getElementById('pageContent').innerHTML = `
-            <div class="page-header">
-                <div><h1>Challenge Assignments</h1><p>View which challenges are assigned to each team</p></div>
+            <div class="page-header with-actions">
+                <div><h1>Challenge Allocation</h1><p>Manually allocate a challenge to each team</p></div>
+                <div class="page-actions">
+                    <button class="btn btn-primary" onclick="openEditModal()">${ICONS.edit} Edit Allocation</button>
+                </div>
             </div>
+            <div id="error-msg" class="error-message"></div>
+            <div id="success-msg" class="success-message"></div>
             <div class="card">
-                <div id="error-msg" class="error-message"></div>
-                <div id="assignContent"><div class="flex-center" style="padding:24px;"><span class="loading-spinner"></span></div></div>
+                <div class="card-header"><h3>Team Allocations</h3></div>
+                <div id="allocContent"><div class="flex-center" style="padding:24px;"><span class="loading-spinner"></span></div></div>
+            </div>
+            <div class="card" style="margin-top:20px;">
+                <div class="card-header"><h3>Release Challenge</h3></div>
+                <div style="padding:16px;">
+                    <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px;">Send each allocated team's challenge to their member emails. Only teams with an allocated challenge will receive an email.</p>
+                    <button class="btn btn-primary" onclick="openReleaseModal()">${ICONS.send} Release Challenges via Email</button>
+                    <div id="releaseResult" style="margin-top:16px;"></div>
+                </div>
+            </div>
+
+            <div id="editModal" class="modal-overlay" onclick="closeEditModal()">
+                <div class="modal modal-lg" onclick="event.stopPropagation()">
+                    <div class="modal-header"><h3>Edit Allocation</h3><button class="modal-close" onclick="closeEditModal()">&times;</button></div>
+                    <div class="modal-body">
+                        <div id="editError" class="error-message"></div>
+                        <div id="editBody"><div class="flex-center" style="padding:24px;"><span class="loading-spinner"></span></div></div>
+                    </div>
+                    <div class="modal-footer">
+                        <button class="btn btn-secondary" onclick="closeEditModal()">Cancel</button>
+                        <button class="btn btn-primary" onclick="saveAllocations()">${ICONS.save} Save Allocation</button>
+                    </div>
+                </div>
+            </div>
+
+            <div id="releaseModal" class="modal-overlay" onclick="closeReleaseModal()">
+                <div class="modal modal-lg" onclick="event.stopPropagation()">
+                    <div class="modal-header"><h3>Confirm Challenge Release</h3><button class="modal-close" onclick="closeReleaseModal()">&times;</button></div>
+                    <div class="modal-body">
+                        <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px;">This will email the following teams with their allocated challenge:</p>
+                        <div id="releaseBody">
+                            <div class="flex-center" style="padding:24px;"><span class="loading-spinner"></span></div>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button class="btn btn-secondary" onclick="closeReleaseModal()">Cancel</button>
+                        <button class="btn btn-primary" onclick="confirmRelease()" id="releaseConfirmBtn">${ICONS.send} Release Challenges</button>
+                    </div>
+                </div>
             </div>
         `;
 
-        async function loadAssignments() {
-            const teamsResp = await API.get('/api/admin/teams');
-            if (!teamsResp) return;
-            const tData = await teamsResp.json();
-            if (tData.teams.length === 0) {
-                document.getElementById('assignContent').innerHTML = '<div class="empty-state"><div class="empty-icon">' + ICONS.inbox + '</div><h3>No teams registered</h3><p>Create teams from the Teams page</p></div>';
+        let currentAllocations = [];
+        let challengeOptions = [];
+
+        async function loadAllocations() {
+            hideError('error-msg'); hideSuccess('success-msg');
+            const [allocResp, optsResp] = await Promise.all([
+                API.get('/api/admin/allocations'),
+                API.get('/api/admin/allocations/options')
+            ]);
+            if (!allocResp || !optsResp) return;
+            const allocData = await allocResp.json();
+            const optsData = await optsResp.json();
+            challengeOptions = optsData.challenges || [];
+            currentAllocations = allocData.allocations || [];
+
+            renderTable();
+        }
+
+        function renderTable() {
+            if (currentAllocations.length === 0) {
+                document.getElementById('allocContent').innerHTML = '<div class="empty-state"><div class="empty-icon">' + ICONS.teams + '</div><h3>No teams available</h3><p>Create teams from the Teams Management page first</p></div>';
                 return;
             }
-            let html = '<div class="table-container"><table><thead><tr><th>Team Code</th><th>Team Name</th><th>Challenge</th><th>Status</th></tr></thead><tbody>';
-            for (const t of tData.teams) {
-                const challCode = t.challenge_code || null;
+            let html = '<div class="table-container"><table><thead><tr><th>Team</th><th>Members</th><th>Allocated Challenge</th><th>Challenge Code</th><th>Status</th></tr></thead><tbody>';
+            for (const a of currentAllocations) {
+                const hasAlloc = !!a.allocated_challenge;
                 html += '<tr>';
-                html += '<td><strong class="font-mono">' + escapeHtml(t.team_code) + '</strong></td>';
-                html += '<td>' + escapeHtml(t.team_name) + '</td>';
-                html += '<td>' + (challCode ? '<span class="badge badge-info">' + escapeHtml(challCode) + '</span>' : '<span class="text-muted">Not assigned</span>') + '</td>';
-                html += '<td>' + getStatusBadge(t.status) + '</td>';
+                html += '<td><strong class="font-mono">' + escapeHtml(a.team_code) + '</strong><br>' + escapeHtml(a.team_name) + '</td>';
+                html += '<td>' + a.team_count + ' member' + (a.team_count === 1 ? '' : 's') + '</td>';
+                html += '<td>' + (a.allocated_challenge_name ? escapeHtml(a.allocated_challenge_name) : '<span class="text-muted">Not allocated</span>') + '</td>';
+                html += '<td>' + (hasAlloc ? '<span class="badge badge-info">' + escapeHtml(a.allocated_challenge) + '</span>' : '<span class="text-muted">&mdash;</span>') + '</td>';
+                html += '<td>' + (hasAlloc ? '<span class="badge badge-success">Allocated</span>' : '<span class="badge badge-danger">Unallocated</span>') + '</td>';
                 html += '</tr>';
             }
             html += '</tbody></table></div>';
-            document.getElementById('assignContent').innerHTML = html;
+            document.getElementById('allocContent').innerHTML = html;
         }
-        loadAssignments();
+
+        function openEditModal() {
+            hideError('error-msg'); hideSuccess('success-msg');
+            document.getElementById('editError').innerHTML = '';
+            if (currentAllocations.length === 0) {
+                alert('No teams available to allocate. Create teams first.');
+                return;
+            }
+            let body = '';
+            for (const a of currentAllocations) {
+                body += `<div class="alloc-row">
+                    <div class="alloc-team">
+                        <div class="alloc-team-name">${escapeHtml(a.team_name)}</div>
+                        <div class="alloc-team-meta"><span class="font-mono">${escapeHtml(a.team_code)}</span> &middot; ${a.team_count} member(s)</div>
+                    </div>
+                    <select class="alloc-select" id="alloc_${escapeHtml(a.team_code)}">
+                        <option value="">-- None --</option>`;
+                for (const c of challengeOptions) {
+                    const sel = a.allocated_challenge === c.challenge_code ? 'selected' : '';
+                    body += `<option value="${escapeHtml(c.challenge_code)}" ${sel}>${escapeHtml(c.challenge_name)} (${escapeHtml(c.challenge_code)})</option>`;
+                }
+                body += `</select>
+                </div>`;
+            }
+            document.getElementById('editBody').innerHTML = body;
+            document.getElementById('editModal').classList.add('active');
+        }
+
+        function closeEditModal() { document.getElementById('editModal').classList.remove('active'); }
+
+        async function saveAllocations() {
+            hideError('editError');
+            const selects = document.querySelectorAll('#editBody .alloc-select');
+            const items = [];
+            for (const sel of selects) {
+                items.push({ team_code: sel.id.replace('alloc_', ''), challenge_id: sel.value });
+            }
+            const btn = document.querySelector('#editModal .modal-footer .btn-primary');
+            const orig = btn.innerHTML;
+            btn.disabled = true; btn.innerHTML = '<span class="loading-spinner"></span> Saving...';
+            try {
+                const resp = await API.put('/api/admin/allocations', items);
+                if (!resp) return;
+                const data = await resp.json().catch(() => ({}));
+                if (resp.ok) {
+                    closeEditModal();
+                    showSuccess('success-msg', 'Allocations saved successfully');
+                    loadAllocations();
+                } else {
+                    showError('editError', extractError(data, 'Failed to save allocations'));
+                }
+            } catch(e) { showError('editError', 'Could not reach the server. Please check your connection and try again.'); }
+            btn.disabled = false; btn.innerHTML = orig;
+        }
+
+        function extractError(data, fallback) {
+            if (!data) return fallback;
+            if (data.detail == null) return fallback;
+            if (typeof data.detail === 'string') return data.detail;
+            if (Array.isArray(data.detail) && data.detail[0] && data.detail[0].msg) return data.detail[0].msg;
+            return JSON.stringify(data.detail);
+        }
+
+        async function openReleaseModal() {
+            hideError('error-msg'); hideSuccess('success-msg');
+            const allocated = currentAllocations.filter(a => a.allocated_challenge);
+            if (allocated.length === 0) {
+                showError('error-msg', 'No allocated teams found. Assign a challenge to at least one team first.');
+                return;
+            }
+            let body = '';
+            for (const a of allocated) {
+                body += `<div class="alloc-row">
+                    <div class="alloc-team">
+                        <div class="alloc-team-name">${escapeHtml(a.team_name)}</div>
+                        <div class="alloc-team-meta"><span class="font-mono">${escapeHtml(a.team_code)}</span> &middot; ${a.team_count} member(s)</div>
+                    </div>
+                    <div style="flex:1;text-align:right;">
+                        <span class="badge badge-info">${escapeHtml(a.allocated_challenge)}</span>
+                        <span style="font-size:13px;color:var(--text-primary);margin-left:6px;">${escapeHtml(a.allocated_challenge_name || '')}</span>
+                    </div>
+                </div>`;
+            }
+            document.getElementById('releaseBody').innerHTML = body;
+            document.getElementById('releaseModal').classList.add('active');
+        }
+
+        function closeReleaseModal() { document.getElementById('releaseModal').classList.remove('active'); }
+
+        async function confirmRelease() {
+            const btn = document.getElementById('releaseConfirmBtn');
+            const orig = btn.innerHTML;
+            btn.disabled = true; btn.innerHTML = '<span class="loading-spinner"></span> Sending...';
+            closeReleaseModal();
+            document.getElementById('releaseResult').innerHTML = '';
+            try {
+                const resp = await API.post('/api/admin/releases/send', {});
+                const data = resp ? await resp.json().catch(() => ({})) : {};
+                renderReleaseResult(resp, data);
+            } catch(e) {
+                document.getElementById('releaseResult').innerHTML = '<div class="error-message show">Could not reach the server. Please check your connection and try again.</div>';
+            }
+            btn.disabled = false; btn.innerHTML = orig;
+        }
+
+        function renderReleaseResult(resp, data) {
+            let html = '';
+            if (!resp || !resp.ok) {
+                html += '<div class="error-message show">' + escapeHtml(data.detail || 'Release failed. Please try again.') + '</div>';
+            } else {
+                const ok = data.success_count || 0;
+                const failed = data.failure_count || 0;
+                let msg;
+                if (ok > 0 && failed === 0) {
+                    msg = ok === 1 ? 'Challenges released successfully.' : 'Challenges released successfully to ' + ok + ' teams.';
+                    html += '<div class="success-message show">' + msg + '</div>';
+                } else if (ok > 0) {
+                    msg = ok === 1 ? '1 challenge released successfully. ' : ok + ' challenges released successfully. ';
+                    msg += failed === 1 ? '1 release failed.' : failed + ' releases failed.';
+                    html += '<div class="error-message show">' + msg + '</div>';
+                } else {
+                    msg = failed === 1 ? 'Release failed. No challenges were sent.' : 'Release failed. No challenges were sent (' + failed + ' failed).';
+                    html += '<div class="error-message show">' + msg + '</div>';
+                }
+                if (data.results && data.results.length) {
+                    html += '<div style="margin-top:12px;display:flex;flex-direction:column;gap:6px;">';
+                    for (const r of data.results) {
+                        const sent = r.status === 'SENT';
+                        html += '<div style="padding:8px 10px;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius);font-size:13px;display:flex;justify-content:space-between;align-items:center;gap:8px;">';
+                        html += '<span><strong>' + escapeHtml(r.team_name) + '</strong> <span class="font-mono text-muted">' + escapeHtml(r.team_code) + '</span></span>';
+                        html += sent ? '<span class="badge badge-success">SENT</span>' : '<span class="badge badge-danger">FAILED</span>';
+                        if (!sent && r.error) html += '<small class="text-muted">' + escapeHtml(r.error) + '</small>';
+                        html += '</div>';
+                    }
+                    html += '</div>';
+                }
+            }
+            document.getElementById('releaseResult').innerHTML = html;
+        }
+
+        loadAllocations();
     </script>
 </body>
 </html>

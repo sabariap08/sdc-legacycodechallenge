@@ -1,362 +1,77 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form, status
-from pydantic import BaseModel, EmailStr
-from typing import Optional, List
-from app.database import get_db, is_db_available
-from app.security import get_admin_user, verify_password, create_token, hash_password
-from app.utils import generate_team_code, generate_bin_number, compute_event_status
-from app.storage import (
-    save_files_to_db,
-    get_file_tree_from_db,
-    get_file_content_from_db,
-    delete_files_from_db,
-    save_evaluator_to_db,
-    delete_evaluator_from_db,
-    delete_workspace_from_db,
-)
-from datetime import datetime
 import os
+import io
+import logging
+import secrets
 import shutil
 import tempfile
 import zipfile
-import io
-import subprocess
-import secrets
-import re
-import logging
+import asyncio
+from typing import Optional, List
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Request
+from pydantic import BaseModel, EmailStr
+from app.database import get_db, is_db_available
+from app.security import get_admin_user
+from app.utils import generate_team_code
+from app.storage import (
+    save_challenge_files_to_db,
+    get_challenge_file_tree_from_db,
+    get_challenge_file_content_from_db,
+    delete_challenge_files_from_db,
+    delete_challenge_zip_from_db,
+    save_challenge_zip_to_db,
+    get_challenge_zip_from_db,
+)
+from app.emailer import email_configured, email_missing_config, _send_sync
+from app.reporting import (
+    challenge_report_pdf,
+    teams_report_pdf,
+    allocations_report_pdf,
+    status_report_pdf,
+)
+from app.config import MAX_ZIP_SIZE_MB, PUBLIC_BASE_URL
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
-DEFAULT_PARTICIPANT_PASSWORD = "participants@123"
 
-# ─────────────────────────────────────────────
-# AUTH
-# ─────────────────────────────────────────────
-
-class AdminLogin(BaseModel):
-    username: str
-    password: str
+def _download_base_url(request: Request) -> str:
+    if PUBLIC_BASE_URL:
+        return PUBLIC_BASE_URL.rstrip("/")
+    return str(request.base_url).rstrip("/")
 
 
-@router.post("/login")
-async def admin_login(body: AdminLogin):
+@router.get("/dashboard")
+async def get_dashboard(admin=Depends(get_admin_user)):
     db = get_db()
-    admin = await db.admins.find_one({"username": body.username})
-    if not admin or not verify_password(body.password, admin["password_hash"]):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
-    token = create_token({"sub": admin["username"], "role": "admin"})
-    await db.audit_logs.insert_one({
-        "action": "admin_login",
-        "actor": body.username,
-        "details": "Admin logged in",
-        "timestamp": datetime.utcnow()
-    })
-    return {"access_token": token, "token_type": "bearer"}
+    total_challenges = await db.challenges.count_documents({})
+    total_teams = await db.teams.count_documents({})
 
+    total_members = 0
+    async for t in db.teams.find({}, {"members": 1}):
+        total_members += len(t.get("members", []) or [])
 
-# ─────────────────────────────────────────────
-# TEAMS
-# ─────────────────────────────────────────────
-
-class ParticipantCreate(BaseModel):
-    name: str
-    email: EmailStr
-    roll_number: Optional[str] = ""
-    college: Optional[str] = ""
-    phone: Optional[str] = ""
-    is_team_leader: bool = False
-
-
-class TeamCreate(BaseModel):
-    team_name: str
-    participant_count: int
-    participants: List[ParticipantCreate]
-    challenge_code: Optional[str] = ""
-
-
-@router.post("/teams")
-async def create_team(body: TeamCreate, admin=Depends(get_admin_user)):
-    db = get_db()
-
-    if not body.team_name or not body.team_name.strip():
-        raise HTTPException(status_code=400, detail="Team name is required")
-    if body.participant_count < 1 or body.participant_count > 4:
-        raise HTTPException(status_code=400, detail="Participant count must be between 1 and 4")
-    if len(body.participants) != body.participant_count:
-        raise HTTPException(status_code=400, detail="Participant count mismatch")
-
-    existing_team = await db.teams.find_one({
-        "team_name": {"$regex": f"^{body.team_name.strip()}$", "$options": "i"}
-    })
-    if existing_team:
-        raise HTTPException(status_code=400, detail="Team name already exists")
-
-    emails = [p.email for p in body.participants]
-    if len(set(emails)) != len(emails):
-        raise HTTPException(status_code=400, detail="Duplicate emails within team not allowed")
-
-    for email in emails:
-        existing = await db.participants.find_one({"email": email})
-        if existing:
-            raise HTTPException(status_code=400, detail=f"Email {email} already registered")
-        blocked = await db.blocked_users.find_one({"email": email})
-        if blocked:
-            raise HTTPException(status_code=400, detail=f"Email {email} is blocked")
-
-    team_code = generate_team_code()
-    attempts = 0
-    while await db.teams.find_one({"team_code": team_code}) and attempts < 10:
-        team_code = generate_team_code()
-        attempts += 1
-
-    used_bins = await db.teams.distinct("bin_number")
-    all_bins = [generate_bin_number(i) for i in range(1, 41)]
-    available_bins = [b for b in all_bins if b not in used_bins]
-    if not available_bins:
-        raise HTTPException(status_code=400, detail="No bins available")
-    bin_number = secrets.choice(available_bins)
-
-    team_doc = {
-        "team_code": team_code,
-        "team_name": body.team_name.strip(),
-        "participant_count": body.participant_count,
-        "bin_number": bin_number,
-        "challenge_code": (body.challenge_code or "").strip() or None,
-        "status": "REGISTERED",
-        "created_at": datetime.utcnow()
-    }
-    await db.teams.insert_one(team_doc)
-
-    default_hash = hash_password(DEFAULT_PARTICIPANT_PASSWORD)
-
-    for i, p in enumerate(body.participants):
-        participant_doc = {
-            "team_code": team_code,
-            "name": p.name.strip(),
-            "email": p.email.strip(),
-            "roll_number": p.roll_number or "",
-            "college": p.college or "",
-            "phone": p.phone or "",
-            "is_team_leader": i == 0,
-            "created_at": datetime.utcnow()
-        }
-        await db.participants.insert_one(participant_doc)
-
-    auth_doc = {
-        "team_code": team_code,
-        "password_hash": default_hash,
-        "created_at": datetime.utcnow(),
-        "updated_at": datetime.utcnow()
-    }
-    await db.team_auth.insert_one(auth_doc)
-
-    await db.audit_logs.insert_one({
-        "action": "team_created",
-        "actor": admin.get("sub", "admin"),
-        "details": f"Team {body.team_name} created with code {team_code}, bin {bin_number}",
-        "timestamp": datetime.utcnow()
-    })
+    allocated = await db.allocations.count_documents(
+        {"challenge_id": {"$ne": None, "$nin": ["", None]}}
+    )
+    if allocated is None:
+        allocated = 0
+    unallocated_teams = total_teams - allocated
+    allocated_challenges = allocated
 
     return {
-        "message": "Registration Successful",
-        "team_name": body.team_name,
-        "team_code": team_code,
-        "bin_number": bin_number,
-        "challenge_code": team_doc.get("challenge_code"),
-        "participant_count": body.participant_count,
-        "team_leader": body.participants[0].name,
-        "default_password": DEFAULT_PARTICIPANT_PASSWORD
+        "total_challenges": total_challenges,
+        "total_teams": total_teams,
+        "total_team_members": total_members,
+        "total_allocated_challenges": allocated_challenges,
+        "total_unallocated_challenges": total_challenges or 0,
+        "allocated_teams": allocated,
+        "unallocated_teams": unallocated_teams if unallocated_teams >= 0 else 0,
     }
 
 
-@router.get("/teams")
-async def list_teams(admin=Depends(get_admin_user)):
-    db = get_db()
-    teams = []
-    async for team in db.teams.find().sort("created_at", -1):
-        team["_id"] = str(team["_id"])
-        blocked_count = await db.blocked_users.count_documents({"team_code": team["team_code"]})
-        team["blocked_count"] = blocked_count
-        team["is_blocked"] = team.get("status") == "BLOCKED" or blocked_count > 0
-        teams.append(team)
-    return {"teams": teams}
-
-
-@router.get("/teams/{team_code}")
-async def get_team(team_code: str, admin=Depends(get_admin_user)):
-    db = get_db()
-    team = await db.teams.find_one({"team_code": team_code})
-    if not team:
-        raise HTTPException(status_code=404, detail="Team not found")
-    team["_id"] = str(team["_id"])
-    participants = []
-    blocked_emails = set()
-    async for bu in db.blocked_users.find({"team_code": team_code}):
-        blocked_emails.add(bu["email"])
-    async for p in db.participants.find({"team_code": team_code}):
-        p["_id"] = str(p["_id"])
-        p["is_blocked"] = p["email"] in blocked_emails
-        participants.append(p)
-    submission = await db.submissions.find_one({"team_code": team_code}, sort=[("submitted_at", -1)])
-    if submission:
-        submission["_id"] = str(submission["_id"])
-    return {
-        "team": team,
-        "participants": participants,
-        "challenge_code": team.get("challenge_code"),
-        "submission": submission
-    }
-
-
-@router.delete("/teams/{team_code}")
-async def delete_team(team_code: str, admin=Depends(get_admin_user)):
-    db = get_db()
-    team = await db.teams.find_one({"team_code": team_code})
-    if not team:
-        raise HTTPException(status_code=404, detail="Team not found")
-
-    challenge_code = team.get("challenge_code")
-    if challenge_code:
-        await delete_workspace_from_db(team_code, challenge_code)
-
-    await db.teams.delete_one({"team_code": team_code})
-    await db.participants.delete_many({"team_code": team_code})
-    await db.team_auth.delete_one({"team_code": team_code})
-    await db.submissions.delete_many({"team_code": team_code})
-    await db.blocked_users.delete_many({"team_code": team_code})
-
-    await db.audit_logs.insert_one({
-        "action": "team_deleted",
-        "actor": admin.get("sub", "admin"),
-        "details": f"Deleted team {team_code} ({team['team_name']})",
-        "timestamp": datetime.utcnow()
-    })
-
-    return {"message": f"Team {team_code} deleted"}
-
-
-@router.get("/participants")
-async def list_participants(admin=Depends(get_admin_user)):
-    db = get_db()
-    participants = []
-    async for p in db.participants.find():
-        p["_id"] = str(p["_id"])
-        participants.append(p)
-    return {"participants": participants}
-
-
-@router.post("/block")
-async def block_entity(body: dict, admin=Depends(get_admin_user)):
-    db = get_db()
-    entity_type = body.get("type", "")
-    target = body.get("target", "").strip()
-    if entity_type not in ("team", "participant") or not target:
-        raise HTTPException(status_code=400, detail="type must be 'team' or 'participant', target is required")
-
-    if entity_type == "team":
-        team = await db.teams.find_one({"team_code": target})
-        if not team:
-            raise HTTPException(status_code=404, detail="Team not found")
-        blocked = []
-        async for p in db.participants.find({"team_code": target}):
-            email = p["email"].lower().strip()
-            if not await db.blocked_users.find_one({"email": email}):
-                await db.blocked_users.insert_one({
-                    "email": email, "team_code": target,
-                    "blocked_by": admin.get("sub", "admin"),
-                    "blocked_at": datetime.utcnow(), "reason": f"Team {target} blocked"
-                })
-                blocked.append(email)
-        await db.teams.update_one({"team_code": target}, {"$set": {"status": "BLOCKED"}})
-        await db.audit_logs.insert_one({
-            "action": "team_blocked", "actor": admin.get("sub", "admin"),
-            "details": f"Blocked team {target} ({len(blocked)} members)", "timestamp": datetime.utcnow()
-        })
-        return {"message": f"Team {target} blocked", "count": len(blocked)}
-    else:
-        participant = await db.participants.find_one({"email": target.lower()})
-        if not participant:
-            raise HTTPException(status_code=404, detail="Participant not found")
-        if await db.blocked_users.find_one({"email": target.lower()}):
-            raise HTTPException(status_code=400, detail="Already blocked")
-        await db.blocked_users.insert_one({
-            "email": target.lower(), "team_code": participant.get("team_code", ""),
-            "blocked_by": admin.get("sub", "admin"),
-            "blocked_at": datetime.utcnow(), "reason": "Individually blocked"
-        })
-        await db.audit_logs.insert_one({
-            "action": "participant_blocked", "actor": admin.get("sub", "admin"),
-            "details": f"Blocked participant {target}", "timestamp": datetime.utcnow()
-        })
-        return {"message": f"Participant {target} blocked"}
-
-
-@router.post("/unblock")
-async def unblock_entity(body: dict, admin=Depends(get_admin_user)):
-    db = get_db()
-    entity_type = body.get("type", "")
-    target = body.get("target", "").strip()
-    if entity_type not in ("team", "participant") or not target:
-        raise HTTPException(status_code=400, detail="type must be 'team' or 'participant', target is required")
-
-    if entity_type == "team":
-        team = await db.teams.find_one({"team_code": target})
-        if not team:
-            raise HTTPException(status_code=404, detail="Team not found")
-        async for p in db.participants.find({"team_code": target}):
-            await db.blocked_users.delete_one({"email": p["email"].lower().strip()})
-        await db.teams.update_one({"team_code": target}, {"$set": {"status": "REGISTERED"}})
-        await db.audit_logs.insert_one({
-            "action": "team_unblocked", "actor": admin.get("sub", "admin"),
-            "details": f"Unblocked team {target}", "timestamp": datetime.utcnow()
-        })
-        return {"message": f"Team {target} unblocked"}
-    else:
-        result = await db.blocked_users.delete_one({"email": target.lower()})
-        if result.deleted_count == 0:
-            raise HTTPException(status_code=404, detail="Blocked record not found")
-        await db.audit_logs.insert_one({
-            "action": "participant_unblocked", "actor": admin.get("sub", "admin"),
-            "details": f"Unblocked participant {target}", "timestamp": datetime.utcnow()
-        })
-        return {"message": f"Participant {target} unblocked"}
-
-
-@router.get("/user-management")
-async def user_management_list(admin=Depends(get_admin_user)):
-    db = get_db()
-    teams = []
-    async for t in db.teams.find().sort("created_at", -1):
-        t["_id"] = str(t["_id"])
-        team_code = t["team_code"]
-        blocked_count = await db.blocked_users.count_documents({"team_code": team_code})
-        t["blocked_count"] = blocked_count
-        t["is_blocked"] = t.get("status") == "BLOCKED" or blocked_count > 0
-        teams.append(t)
-
-    all_participants = []
-    async for p in db.participants.find().sort("created_at", -1):
-        p["_id"] = str(p["_id"])
-        blocked = await db.blocked_users.find_one({"email": p["email"]})
-        p["is_blocked"] = blocked is not None
-        all_participants.append(p)
-
-    blocked_list = []
-    async for bu in db.blocked_users.find():
-        bu["_id"] = str(bu["_id"])
-        participant = await db.participants.find_one({"email": bu["email"]})
-        bu["name"] = participant.get("name", "") if participant else ""
-        team = await db.teams.find_one({"team_code": bu.get("team_code", "")})
-        bu["team_name"] = team.get("team_name", "") if team else ""
-        blocked_list.append(bu)
-
-    return {"teams": teams, "participants": all_participants, "blocked_users": blocked_list}
-
-
-# ─────────────────────────────────────────────
-# CHALLENGES / REPOSITORIES
-# ─────────────────────────────────────────────
+# CHALLENGES
 
 DANGEROUS_EXTENSIONS = {
     '.exe', '.msi', '.dll', '.so', '.dylib', '.bin', '.cmd', '.com',
@@ -366,14 +81,11 @@ DANGEROUS_EXTENSIONS = {
 }
 
 
-def _is_safe_path(member_path: str) -> bool:
+def _is_safe_zip_member(member_path: str) -> bool:
     if ".." in member_path or member_path.startswith("/"):
         return False
     parts = member_path.replace("\\", "/").split("/")
-    for part in parts:
-        if part in ("", ".", ".."):
-            return False
-    return True
+    return all(part not in ("", ".", "..") for part in parts)
 
 
 def _is_dangerous_file(filename: str) -> bool:
@@ -382,208 +94,15 @@ def _is_dangerous_file(filename: str) -> bool:
         return True
     basename = os.path.basename(filename).lower()
     dangerous_names = {'passwd', 'shadow', 'hosts', 'sudoers', '.ssh', 'id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519'}
-    if basename in dangerous_names:
-        return True
-    return False
+    return basename in dangerous_names
 
 
-async def _persist_from_temp_dir(challenge_code: str, disk_path: str) -> int:
-    """Store a challenge's repo + any evaluator tests found inside it into GridFS.
-
-    Returns number of repo files persisted. The temp dir is removed by callers.
-    """
-    files_persisted = await save_files_to_db(challenge_code, disk_path, full_sync=True)
-
-    # Evaluator tests inside the uploaded repo (e.g. evaluator/{code}/*.py or /tests)
-    evaluator_candidates = [
-        os.path.join(disk_path, "evaluator", challenge_code),
-        os.path.join(disk_path, "evaluator"),
-        os.path.join(disk_path, "tests"),
-    ]
-    for cand in evaluator_candidates:
-        if os.path.isdir(cand):
-            await save_evaluator_to_db(challenge_code, cand)
-            break
-
-    return files_persisted
-
-
-class ChallengeImport(BaseModel):
-    challenge_code: str
-    repository_url: str
-
-
-class ImportRequest(BaseModel):
-    challenges: List[ChallengeImport]
-
-
-@router.post("/import-repositories")
-async def import_repositories(body: ImportRequest, admin=Depends(get_admin_user)):
-    db = get_db()
-    results = []
-
-    for ch in body.challenges:
-        try:
-            challenge_code = ch.challenge_code.strip()
-            if not challenge_code:
-                results.append({"challenge_code": challenge_code, "status": "FAILED", "error": "Empty challenge code"})
-                continue
-
-            if not ch.repository_url or not ch.repository_url.strip():
-                results.append({"challenge_code": challenge_code, "status": "FAILED", "error": "Empty URL"})
-                continue
-
-            url = ch.repository_url.strip()
-            if not (url.endswith(".git") or "github.com" in url or "gitlab.com" in url or "bitbucket.org" in url):
-                results.append({"challenge_code": challenge_code, "status": "FAILED", "error": "Invalid repository URL. Use a GitHub/GitLab/Bitbucket URL."})
-                continue
-
-            storage_path = tempfile.mkdtemp(prefix="lcr_import_")
-            try:
-                commit_sha = "unknown"
-                source = "link"
-
-                if "github.com" in url:
-                    # Prefer GitHub codeload archive download (no git binary required, reliable on hosted platforms)
-                    try:
-                        import httpx
-                        normalized = url.rstrip("/")
-                        if normalized.endswith(".git"):
-                            normalized = normalized[:-4]
-                        archive_url = normalized.rstrip("/") + "/archive/refs/heads/main.zip"
-                        with httpx.Client(timeout=120, follow_redirects=True) as c:
-                            r = c.get(archive_url)
-                            if r.status_code != 200:
-                                archive_url = normalized.rstrip("/") + "/archive/refs/heads/master.zip"
-                                r = c.get(archive_url)
-                            if r.status_code != 200:
-                                raise HTTPException(status_code=400, detail=f"Could not fetch default branch: HTTP {r.status_code}")
-                            content = r.content
-                        with zipfile.ZipFile(io.BytesIO(content), 'r') as zf:
-                            topdir = None
-                            for info in zf.infolist():
-                                if info.is_dir():
-                                    topdir = info.filename.rstrip("/")
-                                    break
-                            if topdir:
-                                for info in zf.infolist():
-                                    if info.is_dir():
-                                        continue
-                                    if not info.filename.startswith(topdir + "/"):
-                                        continue
-                                    rel = info.filename[len(topdir) + 1:]
-                                    if not rel:
-                                        continue
-                                    target = os.path.join(storage_path, rel)
-                                    os.makedirs(os.path.dirname(target), exist_ok=True)
-                                    with open(target, "wb") as out:
-                                        out.write(zf.read(info))
-                            else:
-                                zf.extractall(storage_path)
-                        commit_sha = "github-archive"
-                        source = "link"
-                    except Exception as e:
-                        # Fall back to git clone
-                        clone_ok = False
-                        try:
-                            result = subprocess.run(
-                                ["git", "clone", "--depth", "1", url, storage_path],
-                                capture_output=True, text=True, timeout=120
-                            )
-                            if result.returncode == 0:
-                                clone_ok = True
-                            else:
-                                results.append({"challenge_code": challenge_code, "status": "FAILED", "error": f"Git clone failed: {result.stderr.strip()}"})
-                                continue
-                        except subprocess.TimeoutExpired:
-                            results.append({"challenge_code": challenge_code, "status": "FAILED", "error": "Git clone timed out"})
-                            continue
-                        except Exception as e2:
-                            results.append({"challenge_code": challenge_code, "status": "FAILED", "error": f"Git unavailable: {e2}"})
-                            continue
-                        if clone_ok:
-                            sha_result = subprocess.run(
-                                ["git", "-C", storage_path, "rev-parse", "HEAD"],
-                                capture_output=True, text=True
-                            )
-                            commit_sha = sha_result.stdout.strip() if sha_result.returncode == 0 else "unknown"
-                else:
-                    # Non-GitHub: use git clone
-                    try:
-                        result = subprocess.run(
-                            ["git", "clone", "--depth", "1", url, storage_path],
-                            capture_output=True, text=True, timeout=120
-                        )
-                        if result.returncode != 0:
-                            results.append({"challenge_code": challenge_code, "status": "FAILED", "error": result.stderr.strip()})
-                            continue
-                    except subprocess.TimeoutExpired:
-                        results.append({"challenge_code": challenge_code, "status": "FAILED", "error": "Clone timed out"})
-                        continue
-
-                existing = await db.challenges.find_one({"challenge_code": challenge_code})
-                challenge_doc = {
-                    "challenge_code": challenge_code,
-                    "challenge_name": challenge_code,
-                    "repository_source": source,
-                    "repository_url": url,
-                    "language": "auto",
-                    "difficulty": "medium",
-                    "commit_sha": commit_sha,
-                    "setup_instructions": "",
-                    "testing_instructions": "",
-                    "imported_at": datetime.utcnow(),
-                    "status": "READY",
-                    "storage_path": "",
-                }
-
-                if existing:
-                    await db.challenges.update_one(
-                        {"challenge_code": challenge_code},
-                        {"$set": challenge_doc}
-                    )
-                else:
-                    await db.challenges.insert_one(challenge_doc)
-
-                files_persisted = await _persist_from_temp_dir(challenge_code, storage_path)
-
-                result_entry = {
-                    "challenge_code": challenge_code,
-                    "status": "READY",
-                    "commit_sha": commit_sha,
-                    "files_persisted": files_persisted,
-                }
-                if files_persisted == 0 and is_db_available():
-                    result_entry["warning"] = (
-                        "Repository files could not be stored in the database. "
-                        "They will be lost after the server restarts - please re-import."
-                    )
-                    logger.error("Import for %s persisted 0 files to MongoDB", challenge_code)
-                results.append(result_entry)
-            finally:
-                shutil.rmtree(storage_path, ignore_errors=True)
-
-        except subprocess.TimeoutExpired:
-            results.append({"challenge_code": ch.challenge_code, "status": "FAILED", "error": "Clone timed out"})
-        except Exception as e:
-            results.append({"challenge_code": ch.challenge_code, "status": "FAILED", "error": str(e)})
-
-    await db.audit_logs.insert_one({
-        "action": "repository_import",
-        "actor": admin.get("sub", "admin"),
-        "details": f"Imported {len(results)} challenges via link",
-        "timestamp": datetime.utcnow()
-    })
-
-    return {"results": results}
-
-
-@router.post("/upload-challenge")
+@router.post("/challenges")
 async def upload_challenge(
     challenge_name: str = Form(...),
     challenge_code: str = Form(...),
     file: UploadFile = File(...),
-    admin=Depends(get_admin_user)
+    admin=Depends(get_admin_user),
 ):
     db = get_db()
 
@@ -594,34 +113,31 @@ async def upload_challenge(
         raise HTTPException(status_code=400, detail="Challenge code is required")
     if not challenge_name:
         raise HTTPException(status_code=400, detail="Challenge name is required")
-
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file uploaded")
-
-    if not file.filename.lower().endswith('.zip'):
+    if not file.filename.lower().endswith(".zip"):
         raise HTTPException(status_code=400, detail="Only ZIP files are supported")
 
     content = await file.read()
     if len(content) == 0:
         raise HTTPException(status_code=400, detail="Uploaded file is empty")
 
-    if len(content) > 100 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="File too large (max 100MB)")
+    max_bytes = MAX_ZIP_SIZE_MB * 1024 * 1024
+    if len(content) > max_bytes:
+        raise HTTPException(status_code=400, detail=f"File too large (max {MAX_ZIP_SIZE_MB}MB)")
 
     storage_path = tempfile.mkdtemp(prefix="lcr_upload_")
 
     try:
-        with zipfile.ZipFile(io.BytesIO(content), 'r') as zf:
+        with zipfile.ZipFile(io.BytesIO(content), "r") as zf:
             for info in zf.infolist():
                 if info.is_dir():
                     continue
-                if not _is_safe_path(info.filename):
+                if not _is_safe_zip_member(info.filename):
                     raise HTTPException(status_code=400, detail=f"Path traversal detected: {info.filename}")
                 if _is_dangerous_file(info.filename):
                     raise HTTPException(status_code=400, detail=f"Unsupported file type: {info.filename}")
-
             zf.extractall(storage_path)
-
     except zipfile.BadZipFile:
         shutil.rmtree(storage_path, ignore_errors=True)
         raise HTTPException(status_code=400, detail="Invalid or corrupted ZIP file")
@@ -640,45 +156,46 @@ async def upload_challenge(
 
     try:
         existing = await db.challenges.find_one({"challenge_code": challenge_code})
-        challenge_doc = {
-            "challenge_code": challenge_code,
-            "challenge_name": challenge_name,
-            "repository_source": "upload",
-            "repository_url": "",
-            "language": "auto",
-            "difficulty": "medium",
-            "commit_sha": "",
-            "setup_instructions": "",
-            "testing_instructions": "",
-            "imported_at": datetime.utcnow(),
-            "status": "READY",
-            "storage_path": "",
-        }
-
         if existing:
+            await delete_challenge_files_from_db(challenge_code)
             await db.challenges.update_one(
                 {"challenge_code": challenge_code},
-                {"$set": challenge_doc}
+                {"$set": {
+                    "challenge_name": challenge_name,
+                    "updated_at": datetime.utcnow(),
+                    "file_count": 0,
+                }},
             )
         else:
-            await db.challenges.insert_one(challenge_doc)
+            await db.challenges.insert_one({
+                "challenge_code": challenge_code,
+                "challenge_name": challenge_name,
+                "created_at": datetime.utcnow(),
+                "updated_at": datetime.utcnow(),
+                "file_count": 0,
+            })
 
-        files_persisted = await _persist_from_temp_dir(challenge_code, storage_path)
+        files_persisted = await save_challenge_files_to_db(challenge_code, storage_path)
+        await save_challenge_zip_to_db(challenge_code, file.filename, content)
+        await db.challenges.update_one(
+            {"challenge_code": challenge_code},
+            {"$set": {"file_count": files_persisted, "updated_at": datetime.utcnow()}},
+        )
         if files_persisted == 0 and is_db_available():
             logger.error("Upload %s persisted 0 files to MongoDB", challenge_code)
 
         await db.audit_logs.insert_one({
-            "action": "repository_upload",
+            "action": "challenge_uploaded",
             "actor": admin.get("sub", "admin"),
-            "details": f"Uploaded challenge {challenge_code} ({challenge_name}) via file upload",
-            "timestamp": datetime.utcnow()
+            "details": f"Uploaded challenge {challenge_code} ({challenge_name}), {files_persisted} files",
+            "timestamp": datetime.utcnow(),
         })
 
         return {
             "message": f"Challenge {challenge_code} uploaded successfully",
             "challenge_code": challenge_code,
-            "status": "READY",
-            "files_persisted": files_persisted
+            "challenge_name": challenge_name,
+            "files_persisted": files_persisted,
         }
     finally:
         shutil.rmtree(storage_path, ignore_errors=True)
@@ -688,7 +205,7 @@ async def upload_challenge(
 async def list_challenges(admin=Depends(get_admin_user)):
     db = get_db()
     challenges = []
-    async for ch in db.challenges.find():
+    async for ch in db.challenges.find().sort("created_at", -1):
         ch["_id"] = str(ch["_id"])
         challenges.append(ch)
     return {"challenges": challenges}
@@ -701,479 +218,595 @@ async def delete_challenge(challenge_code: str, admin=Depends(get_admin_user)):
     if not challenge:
         raise HTTPException(status_code=404, detail="Challenge not found")
 
-    # 1) Drop the challenge repo GridFS bucket (DB source of truth - nothing on disk)
-    await delete_files_from_db(challenge_code)
-
-    # 2) Drop evaluator GridFS bucket
-    await delete_evaluator_from_db(challenge_code)
-
-    # 3) Drop every team workspace for this challenge
-    try:
-        async for t in db.teams.find({"challenge_code": challenge_code}):
-            await delete_workspace_from_db(t["team_code"], challenge_code)
-    except Exception as e:
-        logger.warning("Failed to clean workspaces for %s: %s", challenge_code, e)
-
+    await delete_challenge_files_from_db(challenge_code)
+    await delete_challenge_zip_from_db(challenge_code)
     await db.challenges.delete_one({"challenge_code": challenge_code})
+    await db.allocations.delete_many({"challenge_id": challenge_code})
 
     await db.audit_logs.insert_one({
-        "action": "repository_deleted",
+        "action": "challenge_deleted",
         "actor": admin.get("sub", "admin"),
-        "details": f"Deleted repository {challenge_code} ({challenge.get('challenge_name', '')})",
-        "timestamp": datetime.utcnow()
+        "details": f"Deleted challenge {challenge_code} ({challenge.get('challenge_name', '')})",
+        "timestamp": datetime.utcnow(),
     })
 
-    return {"message": f"Repository {challenge_code} deleted successfully"}
+    return {"message": f"Challenge {challenge_code} deleted successfully"}
 
 
 @router.get("/challenges/{challenge_code}/file-tree")
-async def get_repo_file_tree(challenge_code: str, admin=Depends(get_admin_user)):
+async def get_challenge_tree(challenge_code: str, admin=Depends(get_admin_user)):
     challenge = await get_db().challenges.find_one({"challenge_code": challenge_code})
     if not challenge:
         raise HTTPException(status_code=404, detail="Challenge not found")
 
-    # DB (GridFS) is the sole source of truth - NO files live on disk anymore.
-    tree = await get_file_tree_from_db(challenge_code)
-    if tree:
-        return {"tree": tree, "challenge_code": challenge_code, "challenge_name": challenge.get("challenge_name", challenge_code)}
+    tree = await get_challenge_file_tree_from_db(challenge_code)
+    if not tree:
+        return {"tree": [], "challenge_code": challenge_code, "challenge_name": challenge.get("challenge_name", challenge_code), "empty": True}
 
-    raise HTTPException(status_code=404, detail="Repository files not found. Try re-importing the repository.")
+    return {
+        "tree": tree,
+        "challenge_code": challenge_code,
+        "challenge_name": challenge.get("challenge_name", challenge_code),
+        "empty": False,
+    }
 
 
 @router.get("/challenges/{challenge_code}/file")
-async def get_repo_file(challenge_code: str, path: str, admin=Depends(get_admin_user)):
+async def get_challenge_file(challenge_code: str, path: str, admin=Depends(get_admin_user)):
     challenge = await get_db().challenges.find_one({"challenge_code": challenge_code})
     if not challenge:
         raise HTTPException(status_code=404, detail="Challenge not found")
 
-    if not _is_safe_path(path):
-        raise HTTPException(status_code=400, detail="Invalid file path")
+    parts = path.replace("\\", "/").split("/")
+    for part in parts:
+        if part in ("", ".", ".."):
+            raise HTTPException(status_code=400, detail="Invalid file path")
 
-    # DB (GridFS) is the sole source of truth.
-    content = await get_file_content_from_db(challenge_code, path)
-    if content is not None:
-        return {"content": content, "path": path, "binary": False}
+    data = await get_challenge_file_content_from_db(challenge_code, path)
+    if data is None:
+        raise HTTPException(status_code=404, detail="File not found")
 
-    raise HTTPException(status_code=404, detail="File not found")
-
-
-# ─────────────────────────────────────────────
-# ALLOCATION
-# ─────────────────────────────────────────────
-
-# ─────────────────────────────────────────────
-# EVENT CONTROL
-# ─────────────────────────────────────────────
-
-@router.get("/event/current")
-async def get_current_event(admin=Depends(get_admin_user)):
-    from app.events import get_current_event as _get_current, compute_current_status
-    current = await _get_current()
-    if not current:
-        return {"event": None, "computed_status": "DRAFT"}
-    current["_id"] = str(current["_id"])
-    computed_status, _ = await compute_current_status()
-    now = datetime.utcnow()
-    start = current.get("event_start_time")
-    end = current.get("event_end_time")
-    remaining_seconds = None
-    countdown_seconds = None
-    if start:
-        if isinstance(start, str):
-            start = datetime.fromisoformat(str(start).replace("Z", "+00:00")).replace(tzinfo=None)
-        if computed_status == "UPCOMING":
-            countdown_seconds = max(0, int((start - now).total_seconds()))
-        elif computed_status == "ONGOING" and end:
-            if isinstance(end, str):
-                end = datetime.fromisoformat(str(end).replace("Z", "+00:00")).replace(tzinfo=None)
-            remaining_seconds = max(0, int((end - now).total_seconds()))
     return {
-        "event": current,
-        "computed_status": computed_status,
-        "countdown_seconds": countdown_seconds,
-        "remaining_seconds": remaining_seconds,
-        "calculated_duration_minutes": _calculated_duration_minutes(current),
+        "content": data["content"].decode("utf-8", errors="replace") if not data["binary"] else "",
+        "path": path,
+        "binary": data["binary"],
+        "size": data["size"],
     }
 
 
-def _calculated_duration_minutes(event: dict) -> int:
-    from app.events import get_event_duration_minutes
-    if not event:
-        return 0
-    return get_event_duration_minutes(event)
+# TEAMS
+
+class TeamMember(BaseModel):
+    name: str
+    email: EmailStr
 
 
-@router.get("/event/status")
-async def get_event_status(admin=Depends(get_admin_user)):
-    return await get_current_event(admin)
+class TeamCreate(BaseModel):
+    team_name: str
+    team_count: int
+    members: List[TeamMember]
 
 
-def _parse_event_times(start_str: str, end_str: str):
-    try:
-        start_dt = datetime.fromisoformat(start_str.replace("Z", "+00:00")).replace(tzinfo=None)
-        end_dt = datetime.fromisoformat(end_str.replace("Z", "+00:00")).replace(tzinfo=None)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid date format")
-    if end_dt <= start_dt:
-        raise HTTPException(status_code=400, detail="End time must be after start time")
-    return start_dt, end_dt
-
-
-@router.post("/event/new")
-async def create_new_event(body: dict, admin=Depends(get_admin_user)):
-    """Create a fresh event from ONLY Start/End times.
-
-    - Rejected while an UPCOMING or ONGOING event exists (must Edit/Cancel first).
-    - If the current event is COMPLETED or CANCELLED, it is archived to History
-      (soft delete) so exactly one event is ever active at a time.
-    - Event code is generated randomly and uniquely.
-    - Status is derived from the clock by ``compute_event_status``.
-    - Duration is computed from Start/End - never stored.
-    - Allocations and submissions are NOT touched by event creation.
-    """
-    from app.events import get_current_event as _get_current, archive_current_event, create_event
+@router.post("/teams")
+async def create_team(body: TeamCreate, admin=Depends(get_admin_user)):
     db = get_db()
 
-    start_str = body.get("event_start_time")
-    end_str = body.get("event_end_time")
-    if not start_str or not end_str:
-        raise HTTPException(status_code=400, detail="Start and End times are required")
-    start_dt, end_dt = _parse_event_times(start_str, end_str)
+    if not body.team_name or not body.team_name.strip():
+        raise HTTPException(status_code=400, detail="Team name is required")
+    if body.team_count < 1:
+        raise HTTPException(status_code=400, detail="Team count must be at least 1")
+    if body.team_count > 4:
+        raise HTTPException(status_code=400, detail="Maximum team size is 4 members")
+    if len(body.members) != body.team_count:
+        raise HTTPException(status_code=400, detail=f"Expected {body.team_count} members but received {len(body.members)}")
 
-    current = await _get_current()
-    if current:
-        current_status = compute_event_status(current)
-        if current_status in ("UPCOMING", "ONGOING"):
-            raise HTTPException(
-                status_code=403,
-                detail=(
-                    "An active event already exists. Edit or cancel it before "
-                    "creating a new event."
-                ),
-            )
-        await archive_current_event("Superseded by a new event")
+    existing = await db.teams.find_one({"team_name": {"$regex": f"^{body.team_name.strip()}$", "$options": "i"}})
+    if existing:
+        raise HTTPException(status_code=400, detail="Team name already exists")
 
-    new_event = await create_event()
+    names_ok = all(m.name and m.name.strip() for m in body.members)
+    if not names_ok:
+        raise HTTPException(status_code=400, detail="All member names are required")
 
-    await db.events.update_one(
-        {"event_id": new_event["event_id"]},
+    emails = [m.email.lower().strip() for m in body.members]
+    if len(set(emails)) != len(emails):
+        raise HTTPException(status_code=400, detail="Duplicate member emails within the same team are not allowed")
+
+    team_code = generate_team_code()
+    attempts = 0
+    while await db.teams.find_one({"team_code": team_code}) and attempts < 10:
+        team_code = generate_team_code()
+        attempts += 1
+
+    members_doc = [
+        {"name": m.name.strip(), "email": m.email.lower().strip()}
+        for m in body.members
+    ]
+
+    await db.teams.insert_one({
+        "team_code": team_code,
+        "team_name": body.team_name.strip(),
+        "team_count": body.team_count,
+        "members": members_doc,
+        "created_at": datetime.utcnow(),
+        "updated_at": datetime.utcnow(),
+    })
+
+    await db.audit_logs.insert_one({
+        "action": "team_created",
+        "actor": admin.get("sub", "admin"),
+        "details": f"Team {body.team_name} created with code {team_code}",
+        "timestamp": datetime.utcnow(),
+    })
+
+    return {"message": "Team created", "team_code": team_code, "team_name": body.team_name}
+
+
+@router.get("/teams")
+async def list_teams(admin=Depends(get_admin_user)):
+    db = get_db()
+    teams = []
+    async for t in db.teams.find().sort("created_at", -1):
+        t["_id"] = str(t["_id"])
+        alloc = await db.allocations.find_one({"team_code": t["team_code"]})
+        t["allocated_challenge"] = alloc.get("challenge_id") if alloc else None
+        teams.append(t)
+    return {"teams": teams}
+
+
+@router.get("/teams/{team_code}")
+async def get_team(team_code: str, admin=Depends(get_admin_user)):
+    db = get_db()
+    t = await db.teams.find_one({"team_code": team_code})
+    if not t:
+        raise HTTPException(status_code=404, detail="Team not found")
+    t["_id"] = str(t["_id"])
+    alloc = await db.allocations.find_one({"team_code": team_code})
+    if alloc:
+        alloc["_id"] = str(alloc["_id"])
+    return {"team": t, "allocation": alloc}
+
+
+@router.put("/teams/{team_code}")
+async def update_team(team_code: str, body: TeamCreate, admin=Depends(get_admin_user)):
+    db = get_db()
+    t = await db.teams.find_one({"team_code": team_code})
+    if not t:
+        raise HTTPException(status_code=404, detail="Team not found")
+
+    if body.team_count < 1:
+        raise HTTPException(status_code=400, detail="Team count must be at least 1")
+    if body.team_count > 4:
+        raise HTTPException(status_code=400, detail="Maximum team size is 4 members")
+    if len(body.members) != body.team_count:
+        raise HTTPException(status_code=400, detail=f"Expected {body.team_count} members but received {len(body.members)}")
+
+    existing = await db.teams.find_one({
+        "team_name": {"$regex": f"^{body.team_name.strip()}$", "$options": "i"},
+        "team_code": {"$ne": team_code},
+    })
+    if existing:
+        raise HTTPException(status_code=400, detail="Team name already exists")
+
+    emails = [m.email.lower().strip() for m in body.members]
+    if len(set(emails)) != len(emails):
+        raise HTTPException(status_code=400, detail="Duplicate member emails within the same team are not allowed")
+
+    await db.teams.update_one(
+        {"team_code": team_code},
         {"$set": {
-            "event_start_time": start_dt,
-            "event_end_time": end_dt,
-            "created_by": admin.get("sub", "admin"),
+            "team_name": body.team_name.strip(),
+            "team_count": body.team_count,
+            "members": [{"name": m.name.strip(), "email": m.email.lower().strip()} for m in body.members],
             "updated_at": datetime.utcnow(),
-        }}
+        }},
     )
 
-    duration_minutes = _calculated_duration_minutes(new_event)
-
     await db.audit_logs.insert_one({
-        "action": "event_created",
+        "action": "team_updated",
         "actor": admin.get("sub", "admin"),
-        "details": f"New event created with code {new_event['event_code']}. Start: {start_dt.isoformat()}, End: {end_dt.isoformat()}, Duration: {duration_minutes} min",
-        "timestamp": datetime.utcnow()
+        "details": f"Updated team {body.team_name} ({team_code})",
+        "timestamp": datetime.utcnow(),
     })
 
-    return {
-        "message": "New event created",
-        "event_code": new_event["event_code"],
-        "event_id": new_event["event_id"],
-        "event_start_time": start_dt.isoformat(),
-        "event_end_time": end_dt.isoformat(),
-        "calculated_duration_minutes": duration_minutes,
-        "status": compute_event_status(new_event),
-    }
+    return {"message": "Team updated", "team_code": team_code}
 
 
-@router.post("/event/cancel")
-async def cancel_current_event(body: dict, admin=Depends(get_admin_user)):
-    """Cancel the current event. A mandatory reason is required."""
-    from app.events import get_current_event as _get_current, cancel_current_event
+@router.delete("/teams/{team_code}")
+async def delete_team(team_code: str, admin=Depends(get_admin_user)):
     db = get_db()
-    current = await _get_current()
-    if not current:
-        raise HTTPException(status_code=404, detail="No active event to cancel")
+    t = await db.teams.find_one({"team_code": team_code})
+    if not t:
+        raise HTTPException(status_code=404, detail="Team not found")
 
-    reason = (body.get("reason") or "").strip()
-    if not reason:
-        raise HTTPException(status_code=400, detail="A cancellation reason is required")
+    team_name = t.get("team_name", team_code)
 
-    status = compute_event_status(current)
-    if status not in ("UPCOMING", "ONGOING"):
-        raise HTTPException(
-            status_code=400,
-            detail=f"A {status} event cannot be cancelled. Start a new event instead.",
-        )
-
-    cancelled = await cancel_current_event(reason)
-    await db.audit_logs.insert_one({
-        "action": "event_cancelled",
-        "actor": admin.get("sub", "admin"),
-        "details": f"Event {current.get('event_code')} cancelled. Reason: {reason}",
-        "timestamp": datetime.utcnow()
-    })
-    return {
-        "message": "Event cancelled",
-        "event_code": current.get("event_code"),
-        "cancelled_at": cancelled.get("cancelled_at"),
-        "cancellation_reason": reason,
-    }
-
-
-class EventUpdate(BaseModel):
-    event_start_time: Optional[str] = None
-    event_end_time: Optional[str] = None
-    leaderboard_enabled: Optional[bool] = None
-
-
-@router.put("/event/current")
-async def update_current_event(body: EventUpdate, admin=Depends(get_admin_user)):
-    """Edit the active event (UPCOMING or ONGOING only).
-
-    - UPCOMING: start and end both editable.
-    - ONGOING: start is locked; only end may change (start change is rejected).
-    - Event code is never regenerated and status is never manually edited.
-    - Duration is recomputed from the persisted times on every read.
-    """
-    from app.events import get_current_event as _get_current
-    db = get_db()
-    event = await _get_current()
-    if not event:
-        raise HTTPException(status_code=404, detail="No event configured")
-
-    computed = compute_event_status(event)
-    if computed in ("COMPLETED", "CANCELLED"):
-        raise HTTPException(
-            status_code=400,
-            detail="The current event is not modifiable. Start a new event instead.",
-        )
-
-    update = {}
-    new_start = event.get("event_start_time")
-    new_end = event.get("event_end_time")
-
-    if body.event_end_time is not None:
-        try:
-            new_end = datetime.fromisoformat(body.event_end_time.replace("Z", "+00:00")).replace(tzinfo=None)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid end time format")
-        update["event_end_time"] = new_end
-
-    if body.event_start_time is not None:
-        if computed == "ONGOING":
-            raise HTTPException(status_code=400, detail="Start time cannot be changed while the event is ongoing.")
-        try:
-            new_start = datetime.fromisoformat(body.event_start_time.replace("Z", "+00:00")).replace(tzinfo=None)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid start time format")
-        update["event_start_time"] = new_start
-
-    if body.leaderboard_enabled is not None:
-        update["leaderboard_enabled"] = body.leaderboard_enabled
-
-    if not update:
-        raise HTTPException(status_code=400, detail="No settings provided")
-
-    if new_start is not None and new_end is not None and (new_start >= new_end):
-        raise HTTPException(status_code=400, detail="End time must be after start time")
-
-    update["updated_at"] = datetime.utcnow()
-    await db.events.update_one({"event_id": event["event_id"]}, {"$set": update})
-
-    duration_minutes = _calculated_duration_minutes({**event, **update})
+    await db.teams.delete_one({"team_code": team_code})
+    await db.allocations.delete_many({"team_code": team_code})
 
     await db.audit_logs.insert_one({
-        "action": "event_settings_updated",
+        "action": "team_deleted",
         "actor": admin.get("sub", "admin"),
-        "details": f"Updated {list(update.keys())} on event {event.get('event_code')}",
-        "timestamp": datetime.utcnow()
+        "details": f"Deleted team {team_name} ({team_code}) and its allocation",
+        "timestamp": datetime.utcnow(),
     })
 
-    return {
-        "message": "Event configuration updated",
-        "event_code": event.get("event_code"),
-        "calculated_duration_minutes": duration_minutes,
-        "status": compute_event_status({**event, **update}),
-    }
+    return {"message": f"Team {team_name} deleted successfully", "team_code": team_code}
 
 
-@router.get("/event/history")
-async def get_event_history(admin=Depends(get_admin_user)):
+# ALLOCATIONS
+
+class AllocationItem(BaseModel):
+    team_code: str
+    challenge_id: Optional[str] = ""
+
+
+@router.get("/allocations")
+async def get_allocations(admin=Depends(get_admin_user)):
     db = get_db()
-    history = []
-    async for h in db.event_history.find().sort("archived_at", -1).limit(100):
-        h["_id"] = str(h["_id"])
-        history.append(h)
-    from app.events import get_current_event as _get_current
-    current = await _get_current()
-    if current:
-        current["_id"] = str(current["_id"])
-    return {"history": history, "current_event": current}
-
-
-@router.get("/event/countdown")
-async def get_event_countdown(admin=Depends(get_admin_user)):
-    from app.events import get_current_event as _get_current, compute_event_status
-    db = get_db()
-    event = await _get_current()
-    if not event:
-        return {"server_time": datetime.utcnow().isoformat(), "status": "DRAFT"}
-    computed = compute_event_status(event)
-    return {
-        "server_time": datetime.utcnow().isoformat(),
-        "status": computed,
-        "event_start_time": event.get("event_start_time"),
-        "event_end_time": event.get("event_end_time"),
-    }
-
-
-# ─────────────────────────────────────────────
-# ANNOUNCEMENTS
-# ─────────────────────────────────────────────
-
-class AnnouncementCreate(BaseModel):
-    title: str
-    message: str
-    priority: Optional[str] = "normal"
-
-
-@router.post("/announcements")
-async def create_announcement(body: AnnouncementCreate, admin=Depends(get_admin_user)):
-    db = get_db()
-    doc = {
-        "title": body.title,
-        "message": body.message,
-        "priority": body.priority,
-        "author": admin.get("sub", "admin"),
-        "created_at": datetime.utcnow(),
-        "active": True
-    }
-    result = await db.announcements.insert_one(doc)
-    await db.audit_logs.insert_one({
-        "action": "announcement_created",
-        "actor": admin.get("sub", "admin"),
-        "details": f"Announcement: {body.title}",
-        "timestamp": datetime.utcnow()
-    })
-    return {"message": "Announcement created", "id": str(result.inserted_id)}
-
-
-@router.get("/announcements")
-async def list_announcements(admin=Depends(get_admin_user)):
-    db = get_db()
-    items = []
-    async for a in db.announcements.find().sort("created_at", -1):
-        a["_id"] = str(a["_id"])
-        items.append(a)
-    return {"announcements": items}
-
-
-@router.delete("/announcements/{announcement_id}")
-async def delete_announcement(announcement_id: str, admin=Depends(get_admin_user)):
-    db = get_db()
-    from bson import ObjectId
-    await db.announcements.delete_one({"_id": ObjectId(announcement_id)})
-    return {"message": "Announcement deleted"}
-
-
-# ─────────────────────────────────────────────
-# LEADERBOARD
-# ─────────────────────────────────────────────
-
-@router.get("/leaderboard")
-async def get_leaderboard(admin=Depends(get_admin_user)):
-    from app.events import get_current_event as _get_current
-    db = get_db()
-    event = await _get_current()
-    event_id = event["event_id"] if event else None
-    query = {"status": "evaluated"}
-    if event_id:
-        query["event_id"] = event_id
-    entries = []
-    async for sub in db.submissions.find(query).sort("score", -1):
-        team = await db.teams.find_one({"team_code": sub["team_code"]})
-        entries.append({
-            "team_code": sub["team_code"],
-            "team_name": team["team_name"] if team else "",
-            "challenge_code": (team.get("challenge_code") or "") if team else "",
-            "score": sub.get("score", 0),
-            "submitted_at": sub.get("submitted_at"),
-            "status": sub.get("status", "")
+    rows = []
+    async for team in db.teams.find().sort("created_at", -1):
+        alloc = await db.allocations.find_one({"team_code": team["team_code"]})
+        ch = await db.challenges.find_one({"challenge_code": alloc["challenge_id"]}) if alloc and alloc.get("challenge_id") else None
+        rows.append({
+            "team_code": team["team_code"],
+            "team_name": team["team_name"],
+            "team_count": team.get("team_count", len(team.get("members", []))),
+            "members": team.get("members", []),
+            "allocated_challenge": alloc.get("challenge_id") if alloc else None,
+            "allocated_challenge_name": ch.get("challenge_name") if ch else None,
         })
-    for i, e in enumerate(entries, 1):
-        e["rank"] = i
-    return {"leaderboard": entries}
+    return {"allocations": rows}
 
 
-# ─────────────────────────────────────────────
+@router.get("/allocations/options")
+async def get_allocation_options(admin=Depends(get_admin_user)):
+    db = get_db()
+    challenges = []
+    async for ch in db.challenges.find().sort("created_at", -1):
+        challenges.append({"challenge_code": ch["challenge_code"], "challenge_name": ch.get("challenge_name", ch["challenge_code"])})
+    return {"challenges": challenges}
+
+
+@router.put("/allocations")
+async def save_allocations(items: List[AllocationItem], admin=Depends(get_admin_user)):
+    db = get_db()
+
+    for item in items:
+        team = await db.teams.find_one({"team_code": item.team_code})
+        if not team:
+            raise HTTPException(status_code=400, detail=f"Team {item.team_code} not found")
+
+        if item.challenge_id:
+            ch = await db.challenges.find_one({"challenge_code": item.challenge_id})
+            if not ch:
+                raise HTTPException(status_code=400, detail=f"Challenge {item.challenge_id} does not exist")
+
+        ch_name = None
+        if item.challenge_id:
+            ch = await db.challenges.find_one({"challenge_code": item.challenge_id})
+            ch_name = ch.get("challenge_name") if ch else None
+
+        await db.allocations.update_one(
+            {"team_code": item.team_code},
+            {"$set": {
+                "team_code": item.team_code,
+                "team_name": team["team_name"],
+                "member_count": team.get("team_count", len(team.get("members", []))),
+                "challenge_id": item.challenge_id or None,
+                "challenge_name": ch_name,
+                "updated_at": datetime.utcnow(),
+            }},
+            upsert=True,
+        )
+
+    await db.audit_logs.insert_one({
+        "action": "allocations_saved",
+        "actor": admin.get("sub", "admin"),
+        "details": f"Saved allocations for {len(items)} teams",
+        "timestamp": datetime.utcnow(),
+    })
+
+    return {"message": "Allocations saved", "count": len(items)}
+
+
+# RELEASE (email)
+
+@router.get("/releases")
+async def get_releases(admin=Depends(get_admin_user)):
+    db = get_db()
+    releases = []
+    async for r in db.releases.find().sort("released_at", -1).limit(500):
+        r["_id"] = str(r["_id"])
+        releases.append(r)
+    return {"releases": releases}
+
+
+@router.post("/releases/send")
+async def send_releases(request: Request, admin=Depends(get_admin_user)):
+    db = get_db()
+
+    if not email_configured():
+        missing = email_missing_config() or "SMTP configuration"
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Email is not configured. Missing: {missing}. "
+                "Add them to backend/.env and restart the server."
+            ),
+        )
+
+    teams = []
+    async for t in db.teams.find():
+        alloc = await db.allocations.find_one({"team_code": t["team_code"]})
+        if not alloc or not alloc.get("challenge_id"):
+            continue
+        ch = await db.challenges.find_one({"challenge_code": alloc["challenge_id"]})
+        if not ch:
+            continue
+        teams.append((t, alloc, ch))
+
+    if not teams:
+        raise HTTPException(status_code=400, detail="No allocated teams found to release. Please allocate challenges first.")
+
+    base_url = _download_base_url(request)
+    results = []
+
+    async def _send_one(team, alloc, ch):
+        team_code = team["team_code"]
+        members = team.get("members", [])
+        emails = [m["email"] for m in members if m.get("email")]
+
+        if not emails:
+            return {"team_code": team_code, "team_name": team["team_name"], "status": "FAILED", "error": "No member emails"}
+
+        token = secrets.token_urlsafe(32)
+        download_url = f"{base_url}/api/releases/download/{token}"
+        challenge_name = ch.get("challenge_name", alloc["challenge_id"])
+        subject = "Legacy Code Rescue - Challenge Assignment"
+        body_text, body_html = _release_email(team["team_name"], challenge_name, alloc["challenge_id"], download_url)
+
+        try:
+            await asyncio.to_thread(_send_sync, emails, subject, body_html, None, body_text)
+            await db.releases.insert_one({
+                "team_code": team_code,
+                "team_name": team["team_name"],
+                "challenge_id": alloc["challenge_id"],
+                "challenge_name": challenge_name,
+                "recipients": emails,
+                "download_token": token,
+                "status": "SENT",
+                "released_at": datetime.utcnow(),
+            })
+            return {"team_code": team_code, "team_name": team["team_name"], "status": "SENT"}
+        except Exception as e:
+            logger.error("Release email failed for team %s: %s", team_code, e)
+            await db.releases.insert_one({
+                "team_code": team_code,
+                "team_name": team["team_name"],
+                "challenge_id": alloc["challenge_id"],
+                "challenge_name": challenge_name,
+                "recipients": emails,
+                "status": "FAILED",
+                "error": str(e),
+                "released_at": datetime.utcnow(),
+            })
+            return {"team_code": team_code, "team_name": team["team_name"], "status": "FAILED", "error": str(e)}
+
+    results = await asyncio.gather(*[_send_one(t, a, c) for (t, a, c) in teams])
+
+    success_count = sum(1 for r in results if r["status"] == "SENT")
+    failure_count = sum(1 for r in results if r["status"] == "FAILED")
+
+    return {
+        "message": f"Release complete: {success_count} sent, {failure_count} failed",
+        "success_count": success_count,
+        "failure_count": failure_count,
+        "results": results,
+    }
+
+
+def _release_email(team_name, challenge_name, challenge_code, download_url):
+    text = f"""\
+Dear {team_name},
+
+Your team has been assigned the following Legacy Code Rescue challenge:
+
+Challenge:    {challenge_name}
+Challenge Code: {challenge_code}
+
+Download your challenge files using the secure link below (expires when the
+challenge is no longer available):
+
+{download_url}
+
+If the link does not work, copy and paste it into your browser.
+
+Regards,
+Legacy Code Rescue Admin"""
+
+    html = f"""\
+<html><body style="font-family:Arial,helvetica,sans-serif;background:#f4f6f8;margin:0;padding:24px;">
+<div style="max-width:600px;margin:0 auto;background:#ffffff;border-radius:10px;overflow:hidden;border:1px solid #e5e7eb;">
+  <div style="background:#0f1117;padding:20px 24px;color:#ffffff;">
+    <h2 style="margin:0;font-size:20px;">Legacy Code Rescue</h2>
+    <div style="font-size:13px;opacity:.8;">Challenge Assignment</div>
+  </div>
+  <div style="padding:24px;">
+    <p style="margin:0 0 16px;color:#1f2937;">Dear {team_name},</p>
+    <p style="margin:0 0 16px;color:#1f2937;">Your team has been assigned the following Legacy Code Rescue challenge:</p>
+    <table cellpadding="10" style="border-collapse:collapse;margin:0 0 20px;width:100%;">
+      <tr>
+        <td style="border:1px solid #e5e7eb;background:#f9fafb;font-weight:600;">Challenge</td>
+        <td style="border:1px solid #e5e7eb;">{challenge_name}</td>
+      </tr>
+      <tr>
+        <td style="border:1px solid #e5e7eb;background:#f9fafb;font-weight:600;">Challenge Code</td>
+        <td style="border:1px solid #e5e7eb;">{challenge_code}</td>
+      </tr>
+    </table>
+    <p style="margin:0 0 16px;color:#1f2937;">Use the button below to download your challenge files:</p>
+    <a href="{download_url}" style="display:inline-block;background:#1f2937;color:#ffffff;padding:12px 22px;border-radius:6px;text-decoration:none;font-weight:600;">CLICK HERE TO DOWNLOAD YOUR CHALLENGE</a>
+    <p style="margin:20px 0 0;color:#6b7280;font-size:13px;">If the button does not work, copy and paste this link into your browser:<br>{download_url}</p>
+  </div>
+  <div style="padding:16px 24px;border-top:1px solid #e5e7eb;font-size:12px;color:#9ca3af;">Regards,<br>Legacy Code Rescue Admin</div>
+</div>
+</body></html>"""
+    return text, html
+
+
+# REPORTS
+
+@router.get("/reports/data")
+async def get_report_data(admin=Depends(get_admin_user)):
+    db = get_db()
+
+    challenges = []
+    async for c in db.challenges.find().sort("created_at", -1):
+        c["_id"] = str(c["_id"])
+        challenges.append({"challenge_code": c["challenge_code"], "challenge_name": c.get("challenge_name", c["challenge_code"])})
+
+    teams = []
+    async for t in db.teams.find().sort("created_at", -1):
+        t["_id"] = str(t["_id"])
+        teams.append({
+            "team_code": t["team_code"],
+            "team_name": t["team_name"],
+            "team_count": t.get("team_count", len(t.get("members", []))),
+            "members": t.get("members", []),
+        })
+
+    allocations = []
+    async for a in db.allocations.find():
+        a["_id"] = str(a["_id"])
+        allocations.append(a)
+
+    releases = []
+    async for r in db.releases.find().sort("released_at", -1).limit(500):
+        r["_id"] = str(r["_id"])
+        releases.append(r)
+
+    return {
+        "total_challenges": len(challenges),
+        "total_teams": len(teams),
+        "challenges": challenges,
+        "teams": teams,
+        "allocations": allocations,
+        "releases": releases,
+    }
+
+
+async def _fetch_report_data():
+    db = get_db()
+
+    challenges = []
+    async for c in db.challenges.find().sort("created_at", -1):
+        challenges.append({
+            "challenge_code": c["challenge_code"],
+            "challenge_name": c.get("challenge_name", c["challenge_code"]),
+            "file_count": c.get("file_count", 0),
+            "created_at": c.get("created_at"),
+        })
+
+    teams = []
+    async for t in db.teams.find().sort("created_at", -1):
+        teams.append({
+            "team_code": t["team_code"],
+            "team_name": t["team_name"],
+            "team_count": t.get("team_count", len(t.get("members", []))),
+            "members": t.get("members", []),
+        })
+
+    allocations = []
+    async for a in db.allocations.find():
+        ch = await db.challenges.find_one({"challenge_code": a.get("challenge_id")})
+        allocations.append({
+            "team_code": a.get("team_code", ""),
+            "team_name": a.get("team_name", ""),
+            "member_count": a.get("member_count", 0),
+            "challenge_name": (ch.get("challenge_name") if ch else a.get("challenge_name", "")) or "",
+            "challenge_code": a.get("challenge_id", ""),
+            "updated_at": a.get("updated_at"),
+        })
+
+    releases = []
+    async for r in db.releases.find().sort("released_at", -1).limit(500):
+        ch = await db.challenges.find_one({"challenge_code": r.get("challenge_id")})
+        releases.append({
+            "team_name": r.get("team_name", ""),
+            "challenge_name": (ch.get("challenge_name") if ch else r.get("challenge_name", "")) or "",
+            "challenge_code": r.get("challenge_id", ""),
+            "recipients": r.get("recipients", []),
+            "status": r.get("status", ""),
+            "released_at": r.get("released_at"),
+        })
+
+    return challenges, teams, allocations, releases
+
+
+def _pdf_response(pdf_bytes, filename):
+    from fastapi.responses import Response
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/reports/pdf/challenges")
+async def get_challenges_report(admin=Depends(get_admin_user)):
+    challenges, _, _, _ = await _fetch_report_data()
+    return _pdf_response(challenge_report_pdf({"challenges": challenges}), "challenges_report.pdf")
+
+
+@router.get("/reports/pdf/teams")
+async def get_teams_report(admin=Depends(get_admin_user)):
+    _, teams, _, _ = await _fetch_report_data()
+    return _pdf_response(teams_report_pdf({"teams": teams}), "teams_report.pdf")
+
+
+@router.get("/reports/pdf/allocations")
+async def get_allocations_report(admin=Depends(get_admin_user)):
+    _, _, allocations, _ = await _fetch_report_data()
+    return _pdf_response(allocations_report_pdf({"allocations": allocations}), "allocated_challenges_report.pdf")
+
+
+@router.get("/reports/pdf/status")
+async def get_status_report(admin=Depends(get_admin_user)):
+    db = get_db()
+    total_challenges = await db.challenges.count_documents({})
+    total_teams = await db.teams.count_documents({})
+    total_releases = await db.releases.count_documents({})
+
+    total_team_members = 0
+    allocated_teams = 0
+    async for t in db.teams.find():
+        total_team_members += t.get("team_count", len(t.get("members", [])))
+        alloc = await db.allocations.find_one({"team_code": t["team_code"]})
+        if alloc and alloc.get("challenge_id"):
+            allocated_teams += 1
+
+    challenges, teams, allocations, releases = await _fetch_report_data()
+
+    stats = {
+        "total_challenges": total_challenges,
+        "total_teams": total_teams,
+        "total_team_members": total_team_members,
+        "allocated_teams": allocated_teams,
+        "unallocated_teams": total_teams - allocated_teams,
+        "total_releases": total_releases,
+    }
+    data = {"stats": stats, "allocations": allocations, "releases": releases}
+    return _pdf_response(status_report_pdf(data), "status_report.pdf")
+
+
 # AUDIT LOGS
-# ─────────────────────────────────────────────
 
 @router.get("/audit-logs")
-async def get_audit_logs(admin=Depends(get_admin_user), search: str = Query(default="")):
+async def get_audit_logs(admin=Depends(get_admin_user)):
     db = get_db()
-    query = {}
-    if search.strip():
-        safe = re.escape(search.strip())
-        query = {
-            "$or": [
-                {"action": {"$regex": safe, "$options": "i"}},
-                {"actor": {"$regex": safe, "$options": "i"}},
-                {"details": {"$regex": safe, "$options": "i"}},
-            ]
-        }
     logs = []
-    async for log in db.audit_logs.find(query).sort("timestamp", -1).limit(500):
+    async for log in db.audit_logs.find().sort("timestamp", -1).limit(200):
         log["_id"] = str(log["_id"])
         logs.append(log)
     return {"logs": logs}
-
-
-# ─────────────────────────────────────────────
-# DASHBOARD
-# ─────────────────────────────────────────────
-
-@router.get("/dashboard")
-async def get_dashboard(admin=Depends(get_admin_user)):
-    from app.events import get_current_event as _get_current, compute_event_status
-    db = get_db()
-
-    total_teams = await db.teams.count_documents({})
-    total_participants = await db.participants.count_documents({})
-    total_challenges = await db.challenges.count_documents({})
-    ready_challenges = await db.challenges.count_documents({"status": "READY"})
-
-    event = await _get_current()
-    event_id = event["event_id"] if event else None
-    event_status = compute_event_status(event) if event else "DRAFT"
-
-    challenge_distribution = []
-    async for ch in db.challenges.find():
-        alloc_count = await db.teams.count_documents({"challenge_code": ch["challenge_code"]})
-        challenge_distribution.append({
-            "challenge_code": ch["challenge_code"],
-            "challenge_name": ch.get("challenge_name", ch.get("name", ch.get("title", ch["challenge_code"]))),
-            "status": ch.get("status", "UNKNOWN"),
-            "allocated_teams": alloc_count
-        })
-
-    allocated_teams = await db.teams.count_documents({"challenge_code": {"$ne": None, "$ne": ""}})
-
-    sub_query = {"event_id": event_id} if event_id else {}
-    total_submissions = await db.submissions.count_documents(sub_query)
-    evaluated_submissions = await db.submissions.count_documents({**sub_query, "status": "evaluated"})
-
-    return {
-        "total_teams": total_teams,
-        "total_participants": total_participants,
-        "imported_challenges": total_challenges,
-        "ready_challenges": ready_challenges,
-        "registered_teams": total_teams,
-        "event_status": event_status,
-        "event_code": event.get("event_code") if event else None,
-        "event_name": event.get("event_name") if event else None,
-        "challenge_distribution": challenge_distribution,
-        "total_submissions": total_submissions,
-        "evaluated_submissions": evaluated_submissions,
-        "allocated_teams": allocated_teams,
-    }

@@ -6,6 +6,10 @@
     <title>Teams - Legacy Code Rescue</title>
     <link rel="stylesheet" href="/static/css/styles.css">
     <style>
+        .member-row { display:grid; grid-template-columns:1fr 1fr 32px; gap:8px; margin-bottom:8px; align-items:center; }
+        .member-row input { width:100%; }
+        .remove-member { background:none; border:none; color:var(--danger); cursor:pointer; font-size:18px; line-height:1; padding:4px; }
+        .team-avatar { width:40px; height:40px; border-radius:var(--radius); background:var(--primary-bg); color:var(--primary); display:flex; align-items:center; justify-content:center; font-weight:700; }
     </style>
 </head>
 <body>
@@ -13,69 +17,64 @@
     <script>
         if (!API.isLoggedIn() || API.role !== 'admin') { window.location.href = '/login'; }
         function logout() { API.clearAuth(); window.location.href = '/login'; }
-        document.body.innerHTML = renderAdminLayout('teams', 'Teams');
+        document.body.innerHTML = renderAdminLayout('teams', 'Teams Management');
         initTheme();
         document.getElementById('pageContent').innerHTML = `
             <div class="page-header with-actions">
-                <div>
-                    <h1>Teams</h1>
-                    <p>All registered teams and participants</p>
-                </div>
-                <div style="display:flex;gap:8px;flex-wrap:wrap;">
-                    <button class="btn btn-primary" onclick="showCreateWizard()">${ICONS.add} New Team</button>
+                <div><h1>Teams Management</h1><p>Create and manage teams with their members</p></div>
+                <button class="btn btn-primary" onclick="showCreateForm()">${ICONS.add} Create Team</button>
+            </div>
+            <div id="error-msg" class="error-message"></div>
+            <div id="success-msg" class="success-message"></div>
+            <div class="card"><div id="teamsContent"><div class="flex-center" style="padding:24px;"><span class="loading-spinner"></span></div></div></div>
+            <div id="formWrap" style="display:none;"></div>
+            <div id="confirmModal" class="modal-overlay" onclick="closeConfirmModal()">
+                <div class="modal" onclick="event.stopPropagation()">
+                    <div class="modal-header"><h3 id="confirmTitle">Confirm</h3><button class="modal-close" onclick="closeConfirmModal()">&times;</button></div>
+                    <div class="modal-body"><p id="confirmBody">Are you sure?</p></div>
+                    <div class="modal-footer">
+                        <button class="btn btn-secondary" onclick="closeConfirmModal()">Cancel</button>
+                        <button class="btn btn-danger" id="confirmBtn">Confirm</button>
+                    </div>
                 </div>
             </div>
-            <div class="card">
-                <div id="error-msg" class="error-message"></div>
-                <div id="success-msg" class="success-message"></div>
-                <div id="teamsContent"><div class="flex-center" style="padding:24px;"><span class="loading-spinner"></span></div></div>
-            </div>
-            <div id="teamDetail" style="display:none;"></div>
-            <div id="wizardWrap" style="display:none;"></div>
         `;
 
-        function showAllocModal(title, body, onConfirm) {
-            document.getElementById('allocModalTitle').textContent = title;
-            document.getElementById('allocModalBody').textContent = body;
-            document.getElementById('allocModalConfirm').onclick = () => { closeAllocModal(); onConfirm(); };
-            document.getElementById('allocModal').classList.add('active');
+        function confirmModal(title, body, onConfirm) {
+            document.getElementById('confirmTitle').textContent = title;
+            document.getElementById('confirmBody').textContent = body;
+            document.getElementById('confirmBtn').onclick = () => { closeConfirmModal(); onConfirm(); };
+            document.getElementById('confirmModal').classList.add('active');
         }
-        function closeAllocModal() { document.getElementById('allocModal').classList.remove('active'); }
+        function closeConfirmModal() { document.getElementById('confirmModal').classList.remove('active'); }
 
         async function loadTeams() {
-            document.getElementById('teamDetail').style.display = 'none';
-            document.getElementById('wizardWrap').style.display = 'none';
+            hideError('error-msg'); hideSuccess('success-msg');
             const pageHeader = document.querySelector('.page-content > .page-header');
-            if (pageHeader) pageHeader.style.display = '';
             const card = document.querySelector('.page-content > .card');
+            if (pageHeader) pageHeader.style.display = '';
             if (card) card.style.display = '';
+            document.getElementById('formWrap').style.display = 'none';
 
-            const teamsResp = await API.get('/api/admin/teams');
-            if (!teamsResp) return;
-            const tData = await teamsResp.json();
-            if (tData.teams.length === 0) {
-                document.getElementById('teamsContent').innerHTML = '<div class="empty-state"><div class="empty-icon">' + ICONS.teams + '</div><h3>No teams registered</h3><p>Create your first team to get started</p></div>';
+            const resp = await API.get('/api/admin/teams');
+            if (!resp) return;
+            const data = await resp.json();
+            if (data.teams.length === 0) {
+                document.getElementById('teamsContent').innerHTML = '<div class="empty-state"><div class="empty-icon">' + ICONS.teams + '</div><h3>No teams created</h3><p>Create your first team to get started</p></div>';
                 return;
             }
-
-            let html = '<div class="table-container"><table><thead><tr><th>Team Code</th><th>Team Name</th><th>Members</th><th>Challenge</th><th>Status</th><th>Actions</th></tr></thead><tbody>';
-            for (const t of tData.teams) {
-                const challCode = t.challenge_code || null;
-                const blocked = t.status === 'BLOCKED';
-                html += '<tr style="' + (blocked ? 'opacity:.6;' : '') + '">';
+            let html = '<div class="table-container"><table><thead><tr><th>Team Code</th><th>Team Name</th><th>Members</th><th>Allocated Challenge</th><th>Actions</th></tr></thead><tbody>';
+            for (const t of data.teams) {
+                const ch = t.allocated_challenge;
+                html += '<tr>';
                 html += '<td><strong class="font-mono">' + escapeHtml(t.team_code) + '</strong></td>';
-                html += '<td>' + escapeHtml(t.team_name) + (blocked ? ' <span class="badge badge-danger">BLOCKED</span>' : '') + '</td>';
-                html += '<td>' + t.participant_count + '</td>';
-                html += '<td>' + (challCode ? '<span class="badge badge-info">' + escapeHtml(challCode) + '</span>' : '<span class="text-muted">Not allocated</span>') + '</td>';
-                html += '<td>' + getStatusBadge(t.status) + '</td>';
+                html += '<td>' + escapeHtml(t.team_name) + '</td>';
+                html += '<td>' + (t.team_count || (t.members && t.members.length) || 0) + '</td>';
+                html += '<td>' + (ch ? '<span class="badge badge-info">' + escapeHtml(ch) + '</span>' : '<span class="text-muted">Not allocated</span>') + '</td>';
                 html += '<td><div class="flex gap-1">';
-                html += '<button class="btn btn-sm btn-secondary" onclick="viewTeam(\'' + t.team_code + '\')">View</button>';
-                if (blocked) {
-                    html += '<button class="btn btn-sm btn-success" onclick="unblockTeam(\'' + t.team_code + '\')">' + ICONS.unlock + ' Unblock</button>';
-                } else {
-                    html += '<button class="btn btn-sm btn-danger" onclick="blockTeam(\'' + t.team_code + '\',\'' + escapeHtml(t.team_name) + '\')">' + ICONS.ban + ' Block</button>';
-                }
-                html += '<button class="btn btn-sm btn-danger" onclick="deleteTeam(\'' + t.team_code + '\',\'' + escapeHtml(t.team_name) + '\')">Delete</button>';
+                html += '<button class="btn btn-sm btn-secondary" onclick="viewTeam(\'' + escapeHtml(t.team_code) + '\')">View</button>';
+                html += '<button class="btn btn-sm btn-outline" onclick="editTeam(\'' + escapeHtml(t.team_code) + '\')">Edit</button>';
+                html += '<button class="btn btn-sm btn-danger" onclick="deleteTeam(\'' + escapeHtml(t.team_code) + '\',\'' + escapeHtml(t.team_name) + '\')">Delete</button>';
                 html += '</div></td></tr>';
             }
             html += '</tbody></table></div>';
@@ -87,273 +86,219 @@
             if (!resp) return;
             const data = await resp.json();
             const t = data.team;
-            let participantsHtml = '';
-            for (const p of data.participants) {
-                participantsHtml += '<div style="padding:12px;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:8px;">';
-                participantsHtml += '<div class="flex-between" style="flex-wrap:wrap;gap:4px;"><div>';
-                participantsHtml += '<strong>' + (p.is_team_leader ? '[LEADER] ' : '') + escapeHtml(p.name) + '</strong>';
-                if (p.is_team_leader) participantsHtml += ' <span class="badge badge-info">LEADER</span>';
-                participantsHtml += '</div></div>';
-                participantsHtml += '<div style="margin-top:6px;font-size:12px;color:var(--text-muted);word-break:break-word;">' + escapeHtml(p.email) + (p.roll_number ? ' | Roll: ' + escapeHtml(p.roll_number) : '') + (p.college ? ' | ' + escapeHtml(p.college) : '') + '</div>';
-                participantsHtml += '<div style="margin-top:8px;">';
-                if (p.is_blocked) {
-                    participantsHtml += '<button class="btn btn-sm btn-success" onclick="unblockParticipant(\'' + escapeHtml(p.email) + '\')">' + ICONS.unlock + ' Unblock</button>';
-                } else {
-                    participantsHtml += '<button class="btn btn-sm btn-danger" onclick="blockParticipant(\'' + escapeHtml(p.email) + '\')">' + ICONS.ban + ' Block</button>';
+            let membersHtml = '<p class="text-muted" style="font-size:13px;">No members</p>';
+            if (t.members && t.members.length) {
+                membersHtml = '<div style="display:flex;flex-direction:column;gap:8px;">';
+                for (const m of t.members) {
+                    membersHtml += '<div style="padding:12px;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">';
+                    membersHtml += '<div><strong>' + escapeHtml(m.name) + '</strong><div style="font-size:12px;color:var(--text-muted);">' + escapeHtml(m.email) + '</div></div>';
+                    membersHtml += '<button class="btn btn-sm btn-outline" onclick="mailTo(\'' + escapeHtml(m.email) + '\')">Email</button>';
+                    membersHtml += '</div>';
                 }
-                participantsHtml += '</div></div>';
+                membersHtml += '</div>';
             }
-
-            let challengeHtml = '<p class="text-muted" style="font-size:13px;">No challenge assigned</p>';
-            if (data.challenge_code) {
-                challengeHtml = '<div style="padding:12px;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius);">';
-                challengeHtml += '<p><strong>Challenge:</strong> <span class="badge badge-info">' + escapeHtml(data.challenge_code) + '</span></p>';
-                challengeHtml += '</div>';
-            }
-
-            let submissionHtml = '<p class="text-muted" style="font-size:13px;">No submissions yet</p>';
-            if (data.submission) {
-                submissionHtml = '<div style="padding:12px;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius);">';
-                submissionHtml += '<p><strong>Score:</strong> ' + data.submission.score + '/' + data.submission.total + '</p>';
-                submissionHtml += '<p><strong>Submitted:</strong> ' + formatDate(data.submission.submitted_at) + '</p>';
-                submissionHtml += '<p><strong>Status:</strong> ' + getStatusBadge(data.submission.status) + '</p>';
-                submissionHtml += '</div>';
-            }
-
-            const teamsContent = document.getElementById('teamsContent');
-            const pageHeader = document.querySelector('.page-content > .page-header');
-            if (teamsContent) teamsContent.closest('.card').style.display = 'none';
-            if (pageHeader) pageHeader.style.display = 'none';
-            document.getElementById('teamDetail').style.display = 'block';
-            document.getElementById('teamDetail').innerHTML = `
-                <div class="team-detail-header">
-                    <div class="team-avatar">${escapeHtml(t.team_name.charAt(0).toUpperCase())}</div>
-                    <div class="team-info">
-                        <h2>${escapeHtml(t.team_name)}</h2>
-                        <p><span class="font-mono">${escapeHtml(t.team_code)}</span> &middot; ${t.participant_count} members &middot; ${getStatusBadge(t.status)}</p>
-                    </div>
-                    <div style="margin-left:auto;display:flex;gap:8px;">
-                        ${t.status === 'BLOCKED' ? '<button class="btn btn-sm btn-success" onclick="unblockTeam(\'' + t.team_code + '\')">' + ICONS.unlock + ' Unblock Team</button>' : '<button class="btn btn-sm btn-danger" onclick="blockTeam(\'' + t.team_code + '\',\'' + escapeHtml(t.team_name) + '\')">' + ICONS.ban + ' Block Team</button>'}
-                        <button class="btn btn-secondary btn-sm" onclick="loadTeams()">Back to List</button>
-                    </div>
-                </div>
-                <div class="grid-2 mb-3">
-                    <div class="card"><div class="card-header"><h3>Participants</h3></div>${participantsHtml}</div>
-                    <div>
-                        <div class="card"><div class="card-header"><h3>Challenge</h3></div>${challengeHtml}</div>
-                        <div class="card"><div class="card-header"><h3>Submission</h3></div>${submissionHtml}</div>
-                    </div>
-                </div>`;
-        }
-
-        async function blockTeam(code, name) {
-            showAllocModal('Block Team', 'Block team "' + name + '"? All members will be prevented from logging in.', async () => {
-                const resp = await API.post('/api/admin/block', { type: 'team', target: code });
-                if (resp && resp.ok) { loadTeams(); }
-                else { const d = resp ? await resp.json() : {}; showError('error-msg', d.detail || 'Failed'); }
-            });
-        }
-
-        async function unblockTeam(code) {
-            showAllocModal('Unblock Team', 'Unblock team "' + code + '"? Members will be able to log in again.', async () => {
-                const resp = await API.post('/api/admin/unblock', { type: 'team', target: code });
-                if (resp && resp.ok) { loadTeams(); }
-                else { const d = resp ? await resp.json() : {}; showError('error-msg', d.detail || 'Failed'); }
-            });
-        }
-
-        async function blockParticipant(email) {
-            showAllocModal('Block Participant', 'Block participant "' + email + '"? They will not be able to log in.', async () => {
-                const resp = await API.post('/api/admin/block', { type: 'participant', target: email });
-                if (resp && resp.ok) { loadTeams(); }
-                else { const d = resp ? await resp.json() : {}; showError('error-msg', d.detail || 'Failed'); }
-            });
-        }
-
-        async function unblockParticipant(email) {
-            showAllocModal('Unblock Participant', 'Unblock participant "' + email + '"?', async () => {
-                const resp = await API.post('/api/admin/unblock', { type: 'participant', target: email });
-                if (resp && resp.ok) { loadTeams(); }
-                else { const d = resp ? await resp.json() : {}; showError('error-msg', d.detail || 'Failed'); }
-            });
-        }
-
-        async function deleteTeam(code, name) {
-            showAllocModal('Delete Team', 'Delete team "' + name + '" (' + code + ')? This will remove all participants and submissions permanently.', async () => {
-                const resp = await API.del('/api/admin/teams/' + code);
-                if (resp && resp.ok) { loadTeams(); }
-                else { const d = resp ? await resp.json() : {}; showError('error-msg', d.detail || 'Failed to delete team'); }
-            });
-        }
-
-        function showCreateWizard() {
             const pageHeader = document.querySelector('.page-content > .page-header');
             const card = document.querySelector('.page-content > .card');
             if (pageHeader) pageHeader.style.display = 'none';
             if (card) card.style.display = 'none';
-            document.getElementById('teamDetail').style.display = 'none';
-            document.getElementById('wizardWrap').style.display = 'block';
-            document.getElementById('wizardWrap').innerHTML = `
-                <div class="card" style="max-width:720px;">
-                    <div class="flex-between mb-2"><h3>Create New Team</h3><button class="btn btn-sm btn-ghost" onclick="loadTeams()">Cancel</button></div>
-                    <div id="wizError" class="error-message"></div>
-                    <div id="wizSuccess" class="success-message"></div>
-                    <div class="steps mb-2">
-                        <div class="step active" id="ws1"><span class="step-number">1</span>Team Info</div>
-                        <div class="step-divider"></div>
-                        <div class="step" id="ws2"><span class="step-number">2</span>Participants</div>
-                        <div class="step-divider"></div>
-                        <div class="step" id="ws3"><span class="step-number">3</span>Review</div>
+            document.getElementById('formWrap').style.display = 'block';
+            document.getElementById('formWrap').innerHTML = `
+                <div class="team-detail-header">
+                    <div class="team-avatar">${escapeHtml((t.team_name||'T').charAt(0).toUpperCase())}</div>
+                    <div class="team-info">
+                        <h2>${escapeHtml(t.team_name)}</h2>
+                        <p><span class="font-mono">${escapeHtml(t.team_code)}</span> &middot; ${t.team_count || (t.members||[]).length} members</p>
                     </div>
-                    <div id="wizStep1">
-                        <div class="form-group"><label>Team Name</label><input type="text" id="wTeamName" placeholder="Enter a unique team name"></div>
-                        <div class="form-group"><label>Assign Challenge</label>
-                            <select id="wChallenge"><option value="">No challenge (assign later)</option></select>
-                        </div>
-                        <div class="form-group"><label>Number of Participants</label>
-                            <select id="wPartCount"><option value="">Select count</option><option value="1">1 Member</option><option value="2">2 Members</option><option value="3">3 Members</option><option value="4">4 Members</option></select>
-                        </div>
-                        <button class="btn btn-primary" onclick="wizGo2()" style="width:auto;">Next: Add Participants</button>
+                    <div style="margin-left:auto;display:flex;gap:8px;">
+                        <button class="btn btn-sm btn-outline" onclick="editTeamFromDetail('${escapeHtml(t.team_code)}')">Edit</button>
+                        <button class="btn btn-secondary btn-sm" onclick="loadTeams()">Back to List</button>
                     </div>
-                    <div id="wizStep2" style="display:none;">
-                        <div id="wizParts"></div>
-                        <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap;">
-                            <button class="btn btn-secondary" onclick="wizGo1()" style="width:auto;">Back</button>
-                            <button class="btn btn-primary" onclick="wizGo3()" style="width:auto;">Next: Review</button>
-                        </div>
-                    </div>
-                    <div id="wizStep3" style="display:none;">
-                        <div id="wizReview"></div>
-                        <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap;">
-                            <button class="btn btn-secondary" onclick="wizGo2()" style="width:auto;">Back</button>
-                            <button class="btn btn-success" onclick="wizSubmit()" id="wizSubmitBtn" style="width:auto;">Create Team</button>
+                </div>
+                <div class="grid-2 mb-3">
+                    <div class="card"><div class="card-header"><h3>Team Members</h3></div><div style="padding:16px;">${membersHtml}</div></div>
+                    <div class="card">
+                        <div class="card-header"><h3>Allocated Challenge</h3></div>
+                        <div style="padding:16px;">
+                            ${data.allocation && data.allocation.challenge_id ? ('<p><span class="badge badge-info">' + escapeHtml(data.allocation.challenge_id) + '</span> ' + escapeHtml(data.allocation.challenge_name || '') + '</p>') : '<p class="text-muted" style="font-size:13px;">No challenge allocated yet. Assign one from the Challenge Allocation page.</p>'}
                         </div>
                     </div>
                 </div>`;
-            loadWizardChallenges();
         }
 
-        async function loadWizardChallenges() {
+        function mailTo(email) { window.location.href = 'mailto:' + email; }
+
+        let challengeOptions = [];
+
+        function renderTeamForm(title, initial) {
+            document.getElementById('formWrap').style.display = 'block';
+            document.getElementById('formWrap').innerHTML = `
+                <div class="card" style="max-width:720px;">
+                    <div class="flex-between mb-2"><h3>${title}</h3><button class="btn btn-sm btn-ghost" onclick="loadTeams()">Cancel</button></div>
+                    <div id="formError" class="error-message"></div>
+                    <div class="form-group"><label>Team Name</label><input type="text" id="teamName" value="${escapeHtml(initial.team_name)}" placeholder="Enter a unique team name"></div>
+                    <div class="form-group"><label>Number of Members</label>
+                        <select id="memberCount" onchange="rebuildMembers()">
+                            ${[1,2,3,4].map(n => `<option value="${n}" ${(initial.team_count>4?4:initial.team_count)===n?'selected':''}>${n} Member${n>1?'s':''}</option>`).join('')}
+                        </select>
+                    </div>
+                    <div id="membersContainer"></div>
+                    <div class="form-group"><label>Allocate Challenge <span class="text-muted" style="font-weight:400;">(optional)</span></label>
+                        <select id="teamChallenge">
+                            <option value="">-- None --</option>
+                            ${challengeOptions.map(c => `<option value="${escapeHtml(c.challenge_code)}" ${initial.allocation_challenge===c.challenge_code?'selected':''}>${escapeHtml(c.challenge_name)} (${escapeHtml(c.challenge_code)})</option>`).join('')}
+                        </select>
+                        <p class="text-muted" style="font-size:12px;margin-top:6px;">Choose a challenge to assign to this team. You can change it later from the Challenge Allocation page.</p>
+                    </div>
+                    <div style="display:flex;gap:8px;margin-top:8px;">
+                        <button class="btn btn-primary" onclick="submitTeamForm('${escapeHtml(initial.team_code)}')" id="formSubmitBtn">Save Team</button>
+                        <button class="btn btn-secondary" onclick="loadTeams()">Cancel</button>
+                    </div>
+                </div>`;
+            document.getElementById('membersContainer').innerHTML = '';
+            for (let i = 0; i < Math.min(initial.team_count, 4); i++) {
+                const m = initial.members && initial.members[i];
+                document.getElementById('membersContainer').innerHTML += memberRowHtml(i, m ? m.name : '', m ? m.email : '');
+            }
+        }
+
+        async function loadChallengeOptions() {
             try {
-                const resp = await API.get('/api/admin/challenges');
+                const resp = await API.get('/api/admin/allocations/options');
                 if (!resp) return;
                 const data = await resp.json();
-                const sel = document.getElementById('wChallenge');
-                for (const ch of (data.challenges || [])) {
-                    const opt = document.createElement('option');
-                    opt.value = ch.challenge_code;
-                    opt.textContent = ch.challenge_code + ' — ' + (ch.challenge_name || ch.name || ch.title || '');
-                    sel.appendChild(opt);
-                }
-            } catch (e) {}
+                challengeOptions = data.challenges || [];
+            } catch(e) { challengeOptions = []; }
         }
 
-        function wizGo1() {
-            document.getElementById('wizStep1').style.display = '';
-            document.getElementById('wizStep2').style.display = 'none';
-            document.getElementById('wizStep3').style.display = 'none';
-            document.getElementById('ws1').className = 'step active';
-            document.getElementById('ws2').className = 'step';
-            document.getElementById('ws3').className = 'step';
+        function memberRowHtml(i, name, email) {
+            return `<div class="member-row">
+                <input type="text" id="mname_${i}" placeholder="Member ${i+1} name" value="${escapeHtml(name)}">
+                <input type="email" id="memail_${i}" placeholder="email@example.com" value="${escapeHtml(email)}">
+                <button class="remove-member" onclick="removeMember(${i})" title="Remove member">&times;</button>
+            </div>`;
         }
 
-        function wizGo2() {
-            hideError('wizError');
-            const name = document.getElementById('wTeamName').value.trim();
-            const count = parseInt(document.getElementById('wPartCount').value);
-            if (!name) { showError('wizError', 'Enter a team name'); return; }
-            if (isNaN(count) || count < 1) { showError('wizError', 'Select number of participants'); return; }
-            const c = document.getElementById('wizParts');
-            if (c.children.length === 0) {
-                for (let i = 0; i < count; i++) {
-                    const card = document.createElement('div');
-                    card.className = 'card';
-                    card.style.marginBottom = '12px';
-                    card.innerHTML = '<h4 style="margin-bottom:12px;font-size:14px;color:' + (i === 0 ? 'var(--primary)' : 'var(--text-secondary)') + '">' + (i === 0 ? '[LEADER] ' : '') + 'Participant ' + (i + 1) + '</h4>' +
-                        '<div class="grid-2">' +
-                        '<div class="form-group"><label>Full Name *</label><input type="text" name="wp' + i + '_name" placeholder="Enter full name"></div>' +
-                        '<div class="form-group"><label>Email *</label><input type="email" name="wp' + i + '_email" placeholder="email@example.com"></div>' +
-                        '<div class="form-group"><label>Roll Number</label><input type="text" name="wp' + i + '_roll" placeholder="e.g. 21CS001"></div>' +
-                        '<div class="form-group"><label>College</label><input type="text" name="wp' + i + '_college" placeholder="e.g. MIT"></div>' +
-                        '<div class="form-group"><label>Phone</label><input type="text" name="wp' + i + '_phone" placeholder="+91 XXXXX XXXXX"></div>' +
-                        '</div>';
-                    c.appendChild(card);
-                }
+        function rebuildMembers() {
+            const count = parseInt(document.getElementById('memberCount').value);
+            const container = document.getElementById('membersContainer');
+            const existing = [];
+            for (let i = 0; i < container.children.length; i++) {
+                const row = container.children[i];
+                existing.push({ name: (row.querySelector('[id^="mname_"]')||{}).value || '', email: (row.querySelector('[id^="memail_"]')||{}).value || '' });
             }
-            document.getElementById('wizStep1').style.display = 'none';
-            document.getElementById('wizStep2').style.display = '';
-            document.getElementById('ws1').className = 'step completed';
-            document.getElementById('ws2').className = 'step active';
-        }
-
-        function wizGo3() {
-            hideError('wizError');
-            const count = parseInt(document.getElementById('wPartCount').value);
+            container.innerHTML = '';
             for (let i = 0; i < count; i++) {
-                const nm = document.querySelector('[name="wp' + i + '_name"]').value.trim();
-                const em = document.querySelector('[name="wp' + i + '_email"]').value.trim();
-                if (!nm || !em) { showError('wizError', 'Fill name and email for Participant ' + (i + 1)); return; }
+                container.innerHTML += memberRowHtml(i, existing[i] ? existing[i].name : '', existing[i] ? existing[i].email : '');
             }
-            let html = '<div style="padding:12px;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:12px;"><p><strong>Team Name:</strong> ' + escapeHtml(document.getElementById('wTeamName').value.trim()) + '</p><p><strong>Members:</strong> ' + count + '</p>';
-            const challSel = document.getElementById('wChallenge');
-            if (challSel.value) {
-                html += '<p><strong>Challenge:</strong> <span class="badge badge-info">' + escapeHtml(challSel.value) + '</span></p>';
-            }
-            html += '</div>';
-            for (let i = 0; i < count; i++) {
-                const nm = document.querySelector('[name="wp' + i + '_name"]').value.trim();
-                const em = document.querySelector('[name="wp' + i + '_email"]').value.trim();
-                const rl = document.querySelector('[name="wp' + i + '_roll"]').value.trim();
-                html += '<div style="padding:10px;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:8px;font-size:13px;"><strong>' + (i === 0 ? '[LEADER] ' : '') + escapeHtml(nm) + '</strong> &mdash; ' + escapeHtml(em) + (rl ? ' | Roll: ' + escapeHtml(rl) : '') + '</div>';
-            }
-            html += '<p style="margin-top:12px;font-size:12px;color:var(--text-muted);">Default password: <strong>participants@123</strong></p>';
-            document.getElementById('wizReview').innerHTML = html;
-            document.getElementById('wizStep1').style.display = 'none';
-            document.getElementById('wizStep2').style.display = 'none';
-            document.getElementById('wizStep3').style.display = '';
-            document.getElementById('ws1').className = 'step completed';
-            document.getElementById('ws2').className = 'step completed';
-            document.getElementById('ws3').className = 'step active';
         }
 
-        async function wizSubmit() {
-            hideError('wizError');
-            const btn = document.getElementById('wizSubmitBtn');
-            btn.disabled = true;
-            btn.innerHTML = '<span class="loading-spinner"></span> Creating...';
-            const count = parseInt(document.getElementById('wPartCount').value);
-            const participants = [];
-            for (let i = 0; i < count; i++) {
-                participants.push({
-                    name: document.querySelector('[name="wp' + i + '_name"]').value.trim(),
-                    email: document.querySelector('[name="wp' + i + '_email"]').value.trim(),
-                    roll_number: document.querySelector('[name="wp' + i + '_roll"]').value.trim(),
-                    college: document.querySelector('[name="wp' + i + '_college"]').value.trim(),
-                    phone: document.querySelector('[name="wp' + i + '_phone"]').value.trim(),
-                    is_team_leader: i === 0
-                });
+        function removeMember(i) {
+            const row = document.querySelector(`[id="mname_${i}"]`).closest('.member-row');
+            row.remove();
+            const count = document.querySelectorAll('#membersContainer .member-row').length;
+            document.getElementById('memberCount').value = count;
+            reindexMembers();
+        }
+
+        function reindexMembers() {
+            const container = document.getElementById('membersContainer');
+            const rows = container.querySelectorAll('.member-row');
+            const data = [];
+            rows.forEach(r => data.push({ name: (r.querySelector('input[type=text]')).value, email: (r.querySelector('input[type=email]')).value }));
+            container.innerHTML = '';
+            data.forEach((d, i) => container.innerHTML += memberRowHtml(i, d.name, d.email));
+        }
+
+        function showCreateForm() {
+            hideError('error-msg'); hideSuccess('success-msg');
+            const pageHeader = document.querySelector('.page-content > .page-header');
+            const card = document.querySelector('.page-content > .card');
+            if (pageHeader) pageHeader.style.display = 'none';
+            if (card) card.style.display = 'none';
+            loadChallengeOptions().then(() => renderTeamForm('Create New Team', { team_name: '', team_code: '', team_count: 2, members: [], allocation_challenge: '' }));
+        }
+
+        async function editTeam(code) {
+            const resp = await API.get('/api/admin/teams/' + code);
+            if (!resp) return;
+            const data = await resp.json();
+            const t = data.team;
+            const pageHeader = document.querySelector('.page-content > .page-header');
+            const card = document.querySelector('.page-content > .card');
+            if (pageHeader) pageHeader.style.display = 'none';
+            if (card) card.style.display = 'none';
+            await loadChallengeOptions();
+            renderTeamForm('Edit Team - ' + t.team_name, { team_name: t.team_name, team_code: t.team_code, team_count: t.team_count || (t.members||[]).length, members: t.members || [], allocation_challenge: data.allocation && data.allocation.challenge_id ? data.allocation.challenge_id : '' });
+            window.scrollTo(0, 0);
+        }
+
+        function editTeamFromDetail(code) { editTeam(code); }
+
+        async function submitTeamForm(code) {
+            hideError('formError');
+            const name = document.getElementById('teamName').value.trim();
+            const rows = document.querySelectorAll('#membersContainer .member-row');
+            const members = [];
+            for (const row of rows) {
+                const nm = (row.querySelector('input[type=text]')||{}).value || '';
+                const em = (row.querySelector('input[type=email]')||{}).value || '';
+                if (nm.trim()) members.push({ name: nm.trim(), email: em.trim() });
             }
+            if (!name) { showError('formError', 'Team name is required'); return; }
+            if (members.length === 0) { showError('formError', 'Add at least one member'); return; }
+            for (const m of members) {
+                if (!m.email.includes('@')) { showError('formError', 'Valid email required for member: ' + m.name); return; }
+            }
+
+            const btn = document.getElementById('formSubmitBtn');
+            btn.disabled = true; btn.innerHTML = '<span class="loading-spinner"></span> Saving...';
+            const payload = { team_name: name, team_count: members.length, members: members };
+            const url = code ? '/api/admin/teams/' + encodeURIComponent(code) : '/api/admin/teams';
+            const challengeSel = document.getElementById('teamChallenge');
+            const challengeCode = challengeSel ? challengeSel.value : '';
             try {
-                const resp = await API.post('/api/admin/teams', {
-                    team_name: document.getElementById('wTeamName').value.trim(),
-                    participant_count: count,
-                    participants: participants,
-                    challenge_code: document.getElementById('wChallenge').value || ''
-                });
-                const data = await resp.json();
-                if (resp.ok) {
-                    showSuccess('wizSuccess', '<h3 style="margin-bottom:12px;">Team Created Successfully</h3>' +
-                        '<div style="padding:12px;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:12px;">' +
-                        '<p><strong>Team Code:</strong> <span class="font-mono" style="font-size:16px;">' + escapeHtml(data.team_code) + '</span></p>' +
-                        '<p><strong>Team Name:</strong> ' + escapeHtml(data.team_name) + '</p>' +
-                        '<p><strong>Default Password:</strong> <code>' + data.default_password + '</code></p></div>' +
-                        '<p style="font-size:12px;color:var(--text-muted);">Share the team code with participants.</p>');
-                    document.getElementById('wizStep3').style.display = 'none';
-                    document.querySelector('.steps').style.display = 'none';
-                } else { showError('wizError', data.detail || 'Failed to create team'); }
-            } catch(e) { showError('wizError', 'Connection error'); }
-            btn.disabled = false;
-            btn.innerHTML = 'Create Team';
+                const resp = code ? await API.put(url, payload) : await API.post(url, payload);
+                if (!resp) return;
+                const data = await resp.json().catch(() => ({}));
+                if (!resp.ok) {
+                    showError('formError', extractError(data, 'Failed to save team'));
+                    btn.disabled = false; btn.innerHTML = 'Save Team';
+                    return;
+                }
+                const teamCode = (data.team_code || code || '').trim();
+                if (challengeCode && teamCode) {
+                    const allocResp = await API.put('/api/admin/allocations', [{ team_code: teamCode, challenge_id: challengeCode }]);
+                    if (allocResp) {
+                        const allocData = await allocResp.json().catch(() => ({}));
+                        if (!allocResp.ok) {
+                            showError('formError', 'Team saved, but challenge not assigned: ' + extractError(allocData, 'unknown error'));
+                            btn.disabled = false; btn.innerHTML = 'Save Team';
+                            return;
+                        }
+                    }
+                }
+                loadTeams();
+            } catch(e) {
+                console.error('Save Team failed:', e);
+                showError('formError', 'Request failed: ' + (e && e.message ? e.message : String(e)));
+            }
+            btn.disabled = false; btn.innerHTML = 'Save Team';
+        }
+
+        function extractError(data, fallback) {
+            if (!data) return fallback;
+            if (data.detail == null) return fallback;
+            if (typeof data.detail === 'string') return data.detail;
+            if (Array.isArray(data.detail) && data.detail[0] && data.detail[0].msg) return data.detail[0].msg;
+            return JSON.stringify(data.detail);
+        }
+
+        function deleteTeam(code, name) {
+            confirmModal('Delete Team', 'Delete team "' + name + '" (' + code + ')? This cannot be undone.', async () => {
+                const resp = await API.del('/api/admin/teams/' + encodeURIComponent(code));
+                if (resp && resp.ok) { loadTeams(); }
+                else { const d = resp ? await resp.json() : {}; showError('error-msg', d.detail || 'Failed to delete team'); }
+            });
         }
 
         loadTeams();

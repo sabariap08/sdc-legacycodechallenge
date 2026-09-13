@@ -18,15 +18,15 @@
                 </svg>
             </div>
             <div class="logo-text">Legacy <span>Code Rescue</span></div>
-            <div class="subtitle">Debugging & Bug-Bounty Challenge Portal</div>
+            <div class="subtitle">Admin Management Platform</div>
         </div>
 
         <div id="error-msg" class="error-message"></div>
 
         <form id="loginForm">
             <div class="form-group">
-                <label>Email or Username</label>
-                <input type="text" id="identifier" placeholder="Enter email or username" required autocomplete="username">
+                <label>Username</label>
+                <input type="text" id="username" placeholder="Enter admin username" required autocomplete="username">
             </div>
             <div class="form-group">
                 <label>Password</label>
@@ -65,11 +65,11 @@
             e.preventDefault();
             hideError('error-msg');
 
-            const identifier = document.getElementById('identifier').value.trim();
+            const username = document.getElementById('username').value.trim();
             const password = document.getElementById('password').value;
 
-            if (!identifier || !password) {
-                showError('error-msg', 'Please enter both email/username and password.');
+            if (!username || !password) {
+                showError('error-msg', 'Please enter your username and password.');
                 return;
             }
 
@@ -79,23 +79,16 @@
                 const resp = await fetch('/api/login', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ identifier, password })
+                    body: JSON.stringify({ username, password })
                 });
 
                 const data = await resp.json();
 
                 if (resp.ok && data.access_token) {
                     API.setAuth(data.access_token, data.role);
-                    if (data.role === 'admin') {
-                        window.location.href = '/admin/dashboard';
-                    } else if (data.role === 'participant') {
-                        window.location.href = '/participant/dashboard';
-                    } else {
-                        showError('error-msg', 'Account role is not configured.');
-                        setLoading(false);
-                    }
+                    window.location.href = '/admin/dashboard';
                 } else {
-                    showError('error-msg', data.detail || 'Invalid email or password.');
+                    showError('error-msg', data.detail || 'Invalid username or password.');
                     setLoading(false);
                 }
             } catch (err) {
