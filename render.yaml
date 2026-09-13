@@ -21,3 +21,23 @@ services:
         value: HS256
       - key: JWT_EXPIRE_MINUTES
         value: "480"
+      - key: PUBLIC_BASE_URL
+        value: ""
+      - key: EMAIL_ADDRESS
+        sync: false
+      - key: EMAIL_PASSWORD
+        sync: false
+      - key: SENDER_DISPLAY_NAME
+        value: Team Ignitrron - Legacy Code Rescue
+      - key: SMTP_HOST
+        value: smtp.gmail.com
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_USERNAME
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: SMTP_USE_TLS
+        value: "true"
+      - key: SMTP_USE_SSL
+        value: "false"
